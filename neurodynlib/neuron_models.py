@@ -65,6 +65,7 @@ class AdEx(object):
         .. math::
             \frac{dv}{dt} = (-(v-v_rest) +delta_T*exp((v-v_rheobase)/delta_T)+ R * I_stim(t,i) - R * w)/(tau_m) : volt \\
             \frac{dw}{dt} = (a*(v-v_rest)-w)/tau_w : amp
+
         Args:
             tau_m (Quantity): membrane time scale
             R (Quantity): membrane restistance

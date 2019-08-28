@@ -23,6 +23,12 @@ b2.defaultclock.dt = 0.01 * b2.ms
 
 
 class AdEx(object):
+    """
+    Implementation of the Adaptive Exponential Integrate-and-Fire model.
+    See Neuronal Dynamics
+    `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
+    """
+
     # default values. (see Table 6.1, Initial Burst)
     # http://neuronaldynamics.epfl.ch/online/Ch6.S2.html#Ch6.F3
     MEMBRANE_TIME_SCALE_tau_m = 5 * b2.ms
@@ -138,6 +144,11 @@ class AdEx(object):
 
 
 class passive_cable(object):
+    """
+    Implements compartmental model of a passive cable. See Neuronal Dynamics
+    `Chapter 3 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch3.S2.html>`_
+    """
+
     # DEFAULT morphological and electrical parameters
     CABLE_LENGTH = 500. * b2.um  # length of dendrite
     CABLE_DIAMETER = 2. * b2.um  # diameter of dendrite
@@ -226,6 +237,11 @@ class passive_cable(object):
 
 
 class exp_IF(object):
+    """
+    Exponential Integrate-and-Fire model.
+    See Neuronal Dynamics, `Chapter 5 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch5.S2.html>`_
+    """
+
     # default values.
     MEMBRANE_TIME_SCALE_tau = 12.0 * b2.ms
     MEMBRANE_RESISTANCE_R = 20.0 * b2.Mohm
@@ -317,6 +333,11 @@ class exp_IF(object):
 
 
 class HH(object):
+    """
+    Implementation of a Hodging-Huxley neuron
+    Relevant book chapters:
+    - http://neuronaldynamics.epfl.ch/online/Ch2.S2.html
+    """
 
     def plot_data(self, state_monitor, title=None):
         """Plots the state_monitor variables ["vm", "I_e", "m", "n", "h"] vs. time.
@@ -425,6 +446,14 @@ class HH(object):
 
 
 class LIF(object):
+    """
+    This file implements a leaky intergrate-and-fire (LIF) model.
+    You can inject a step current or sinusoidal current into
+    neuron using LIF_Step() or LIF_Sinus() methods respectively.
+    Relevant book chapters:
+    - http://neuronaldynamics.epfl.ch/online/Ch1.S3.html
+    """
+
     V_REST = -70 * b2.mV
     V_RESET = -65 * b2.mV
     FIRING_THRESHOLD = -50 * b2.mV
@@ -593,9 +622,17 @@ class LIF(object):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
         plt.show()
 
-# TODO: Part of neuron_type/neurons.py missing
+# TODO? Part of neuron_type/neurons.py missing
 class NeuronAbstract(object):
-    """Abstract base class for both neuron types.
+    """
+    This file implements a type I and a type II model from
+    the abstract base class NeuronAbstract.
+    You can inject step currents and plot the responses,
+    as well as get firing rates.
+    Relevant book chapters:
+    - http://neuronaldynamics.epfl.ch/online/Ch4.S4.html
+
+    Abstract base class for both neuron types.
     This stores its own recorder and network, allowing
     each neuron to be run several times with changing
     currents while keeping the same neurogroup object
@@ -749,6 +786,14 @@ class _NeuronTypeTwo(NeuronAbstract):
 
 
 class FitzhughNagumo(object):
+    """
+    This file implements functions to simulate and analyze
+    Fitzhugh-Nagumo type differential equations with Brian2.
+    Relevant book chapters:
+    - http://neuronaldynamics.epfl.ch/online/Ch4.html
+    - http://neuronaldynamics.epfl.ch/online/Ch4.S3.html.
+    """
+
     def get_trajectory(self, v0=0., w0=0., I=0., eps=0.1, a=2.0, tend=500.):
         """Solves the following system of FitzHugh Nagumo equations
         for given initial conditions:

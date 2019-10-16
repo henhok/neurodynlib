@@ -54,17 +54,17 @@ def plot_voltage_and_current_traces(voltage_monitor, current, title=None, firing
     plt.ylabel("Input current [A] \n min: {0} \nmax: {1}".format(min_current, max_current))
     plt.grid()
     axis_v = plt.subplot(212)
-    plt.plot(time_values_ms, voltage_monitor[0].v / b2.mV, lw=2)
+    plt.plot(time_values_ms, voltage_monitor[0].vm / b2.mV, lw=2)
     if firing_threshold is not None:
         plt.plot(
             (voltage_monitor.t / b2.ms)[[0, -1]],
             [firing_threshold / b2.mV, firing_threshold / b2.mV],
             "r--", lw=2
         )
-    max_val = max(voltage_monitor[0].v)
+    max_val = max(voltage_monitor[0].vm)
     if firing_threshold is not None:
         max_val = max(max_val, firing_threshold)
-    min_val = min(voltage_monitor[0].v)
+    min_val = min(voltage_monitor[0].vm)
     margin = 0.05 * (max_val - min_val)
     plt.ylim((min_val - margin) / b2.mV, (max_val + margin) / b2.mV)
     plt.xlabel("t [ms]")

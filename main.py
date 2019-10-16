@@ -1,4 +1,4 @@
-import neurodynlib as ndl
+import neurodynlib as nd
 
-x = ndl.HH()
-x.getting_started()
+x = nd.LifNeuron()
+print(x.get_default_parameters())

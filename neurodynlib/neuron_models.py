@@ -201,11 +201,14 @@ class NeuronSuperclass(object):
         return self.get_threshold_condition
 
     def get_initial_values(self):  # Model-specific
-        return {'vm': self.neuron_parameters['E_leak']}
+        init_vals = dict(self.initial_values)
+        vm_dict = {'vm': self.neuron_parameters['E_leak']}
+        init_vals.update(vm_dict)
+        return init_vals
 
     def simulate_neuron(self, I_stim=input_factory.get_zero_current(), simulation_time=1000*ms, **kwargs):
 
-        neuron_parameters = dict(self.neuron_parameters)  # Make a copy of default parameters
+        neuron_parameters = dict(self.neuron_parameters)  # Make a copy of parameters; otherwise will change object params
         neuron_parameters.update(kwargs)
         refractory_period = neuron_parameters['refractory_period']
 
@@ -259,6 +262,9 @@ class NeuronSuperclass(object):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
         plt.show()
 
+    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA):
+        raise NotImplementedError
+
 
 class LifNeuron(NeuronSuperclass):
     """
@@ -290,56 +296,6 @@ class LifNeuron(NeuronSuperclass):
 
     def __init__(self):
         super().__init__()
-
-    def simulate_LIF_neuron(self, I_stim=input_factory.get_zero_current(),
-                            simulation_time=5 * ms,
-                            E_leak=V_REST,
-                            v_reset=V_RESET,
-                            firing_threshold=FIRING_THRESHOLD,
-                            R=MEMBRANE_RESISTANCE,
-                            tau=MEMBRANE_TIME_SCALE,
-                            abs_refractory_period=ABSOLUTE_REFRACTORY_PERIOD):
-        """Basic leaky integrate and fire neuron implementation.
-        Args:
-            input_current (TimedArray): TimedArray of current amplitudes. One column per current_injection_location.
-            simulation_time (Quantity): Time for which the dynamics are simulated: 5ms
-            v_rest (Quantity): Resting potential: -70mV
-            v_reset (Quantity): Reset voltage after spike - 65mV
-            firing_threshold (Quantity) Voltage threshold for spiking -50mV
-            membrane_resistance (Quantity): 10Mohm
-            membrane_time_scale (Quantity): 8ms
-            abs_refractory_period (Quantity): 2ms
-        Returns:
-            StateMonitor: Brian2 StateMonitor for the membrane voltage "v"
-            SpikeMonitor: Brian2 SpikeMonitor
-        """
-
-        # differential equation of Leaky Integrate-and-Fire model
-        # eqs = """
-        # dv/dt =
-        # ( -(v-v_rest) + membrane_resistance * input_current(t,i) ) / membrane_time_scale : volt (unless refractory)"""
-        eqs = self.neuron_eqs
-        C = tau / R
-        g_leak = 1/R
-        noise_sigma = 0.1*mV
-        tonic_current = 0*pA
-        taum_soma = tau
-
-        # LIF neuron using Brian2 library
-        neuron = b2.NeuronGroup(
-            1, model=eqs, reset="vm=v_reset", threshold="vm>firing_threshold",
-            refractory=abs_refractory_period, method="euler")
-        neuron.vm = E_leak  # set initial value
-
-        # monitoring membrane potential of neuron and injecting current
-        state_monitor = b2.StateMonitor(neuron, ["vm"], record=True)
-        spike_monitor = b2.SpikeMonitor(neuron)
-
-        # run the simulation
-        net = b2.Network(neuron, state_monitor, spike_monitor)
-        net.run(simulation_time)
-
-        return state_monitor, spike_monitor
 
     def _obfuscate_params(self, param_set):
         """ A helper to _obfuscate_params a parameter vector.
@@ -415,37 +371,6 @@ class LifNeuron(NeuronSuperclass):
             abs_refractory_period=vals[5])
         return state_monitor, spike_monitor
 
-    def getting_started_lif(self):
-        """
-        An example to quickly get started with the LIF module.
-        Returns:
-        """
-        # specify step current
-        step_current = input_factory.get_step_current(
-            t_start=100, t_end=200, unit_time=ms,
-            amplitude=1.2 * b2.namp)
-        # run the LIF model
-        (state_monitor, spike_monitor) = self.simulate_LIF_neuron(I_stim=step_current, simulation_time=300 * ms)
-
-        # plot the membrane voltage
-        plot_tools.plot_voltage_and_current_traces(state_monitor, step_current,
-                                                   title="Step current", firing_threshold=LifNeuron.FIRING_THRESHOLD)
-        print("nr of spikes: {}".format(len(spike_monitor.t)))
-        plt.show()
-
-        # second example: sinusoidal current. note the higher resolution 0.1 * ms
-        sinusoidal_current = input_factory.get_sinusoidal_current(
-            500, 1500, unit_time=0.1 * ms,
-            amplitude=2.5 * b2.namp, frequency=150 * b2.Hz, direct_current=2. * b2.namp)
-        # run the LIF model
-        (state_monitor, spike_monitor) = self.simulate_LIF_neuron(
-            I_stim=sinusoidal_current, simulation_time=200 * ms)
-        # plot the membrane voltage
-        plot_tools.plot_voltage_and_current_traces(
-            state_monitor, sinusoidal_current, title="Sinusoidal input current", firing_threshold=LifNeuron.FIRING_THRESHOLD)
-        print("nr of spikes: {}".format(spike_monitor.count[0]))
-        plt.show()
-
 
 class EifNeuron(NeuronSuperclass):
     """
@@ -482,71 +407,6 @@ class EifNeuron(NeuronSuperclass):
         super().__init__()
         self.threshold_condition = 'vm > V_cut'
 
-
-    def simulate_exponential_IF_neuron(self,
-            tau=MEMBRANE_TIME_SCALE_tau,
-            R=MEMBRANE_RESISTANCE_R,
-            E_leak=V_REST,
-            v_reset=V_RESET,
-            VT=RHEOBASE_THRESHOLD_v_rh,
-            v_spike=FIRING_THRESHOLD_v_spike,
-            delta_T=SHARPNESS_delta_T,
-            I_stim=input_factory.get_zero_current(),
-            simulation_time=200 * ms):
-        """
-        Implements the dynamics of the exponential Integrate-and-fire model
-        Args:
-            tau (Quantity): Membrane time constant
-            R (Quantity): Membrane resistance
-            v_rest (Quantity): Resting potential
-            v_reset (Quantity): Reset value (vm after spike)
-            v_rheobase (Quantity): Rheobase threshold
-            v_spike (Quantity) : voltage threshold for the spike condition
-            delta_T (Quantity): Sharpness of the exponential term
-            I_stim (TimedArray): Input current
-            simulation_time (Quantity): Duration for which the model is simulated
-        Returns:
-            (voltage_monitor, spike_monitor):
-            A b2.StateMonitor for the variable "v" and a b2.SpikeMonitor
-        """
-
-        # eqs = """
-        # dv/dt = (-(v-v_rest) +delta_T*exp((v-v_rheobase)/delta_T)+ R * I_stim(t,i))/(tau) : volt
-        # """
-        eqs = self.neuron_eqs
-        C = tau / R
-        g_leak = 1/R
-        noise_sigma = 0.1*mV
-        tonic_current = 0*pA
-        taum_soma = tau
-
-        neuron = b2.NeuronGroup(1, model=eqs, reset="vm=v_reset", threshold="vm>v_spike", method="euler")
-        neuron.vm = E_leak  #v_rest
-        # monitoring membrane potential of neuron and injecting current
-        voltage_monitor = b2.StateMonitor(neuron, ["vm"], record=True)
-        spike_monitor = b2.SpikeMonitor(neuron)
-
-        # run the simulation
-        net = b2.Network(neuron, voltage_monitor, spike_monitor)
-        net.run(simulation_time)
-
-        return voltage_monitor, spike_monitor
-
-
-    def getting_started_eif(self):
-        """
-        A simple example
-        """
-
-        input_current = input_factory.get_step_current(t_start=20, t_end=120, unit_time=ms, amplitude=0.8 * namp)
-        state_monitor, spike_monitor = self.simulate_exponential_IF_neuron(
-            I_stim=input_current, simulation_time=180 * ms)
-        plot_tools.plot_voltage_and_current_traces(
-            state_monitor, input_current, title="step current", firing_threshold=EifNeuron.FIRING_THRESHOLD_v_spike)
-        print("nr of spikes: {}".format(spike_monitor.count[0]))
-        plt.show()
-
-
     def _min_curr_expl(self):
 
         durations = [1, 2, 5, 10, 20, 50, 100, 200]
@@ -558,7 +418,7 @@ class EifNeuron(NeuronSuperclass):
         input_current = input_factory.get_step_current(
             t_start=10, t_end=10 + t - 1, unit_time=ms, amplitude=I_amp)
 
-        state_monitor, spike_monitor = self.simulate_exponential_IF_neuron(
+        state_monitor, spike_monitor = self.simulate_neuron(
             I_stim=input_current, simulation_time=(t + 20) * ms)
 
         plot_tools.plot_voltage_and_current_traces(
@@ -590,12 +450,28 @@ class AdexNeuron(NeuronSuperclass):
     # a technical threshold to tell the algorithm when to reset vm to v_reset
     FIRING_THRESHOLD_v_spike = -30. * mV
 
+    default_neuron_parameters = {
+            'E_leak': -70 * mV,
+            'V_reset': -65 * mV,
+            'V_threshold': -50 * mV,
+            'g_leak': 5 * nS,
+            'C': 100 * pF,
+            'DeltaT': 2 * mV,
+            'a': 2 * nS,
+            'b': 20 * pA,
+            'tau_w': 30 * ms,
+            'refractory_period': 2.0 * ms,
+            'V_cut': 20 * mV
+    }
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) - w + g_leak * DeltaT * exp((vm-V_threshold) / DeltaT)',
+                          'NEURON_MODEL_EQS': 'dw/dt = (a*(vm-E_leak) - w) / tau_w : amp'}
+
     def __init__(self):
 
-        neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + g_leak * delta_T * exp((vm-VT) / delta_T) + I_stim(t,i) - w',
-                              'NEURON_MODEL_EQ': 'dw/dt=(a*(vm-E_leak)-w)/tau_w : amp'}
-        super().__init__(neuron_model_defns)
-        self.neuron_eqs = self.get_membrane_equation()
+        super().__init__()
+        self.threshold_condition = 'vm > V_cut'
+        self.reset_statements = 'vm = V_reset; w += b'
 
     # This function implement Adaptive Exponential Leaky Integrate-And-Fire neuron model
     def simulate_AdEx_neuron(self,
@@ -691,25 +567,61 @@ class AdexNeuron(NeuronSuperclass):
         plt.show()
 
 
-    def getting_started(self):
+    def getting_started_adex(self):
         """
         Simple example to get started
         """
 
         from neurodynlib.tools import plot_tools
         current = input_factory.get_step_current(10, 200, 1. * ms, 65.0 * pA)
-        state_monitor, spike_monitor = self.simulate_AdEx_neuron(I_stim=current, simulation_time=300 * ms)
+        state_monitor, spike_monitor = self.simulate_neuron(I_stim=current, simulation_time=300 * ms)
         plot_tools.plot_voltage_and_current_traces(state_monitor, current)
-        self.plot_adex_state(state_monitor)
+        # self.plot_adex_state(state_monitor)
         print("nr of spikes: {}".format(spike_monitor.count[0]))
 
 
-class HodgkinHuxleyNeuron(object):
+class HodgkinHuxleyNeuron(NeuronSuperclass):
     """
     Implementation of a Hodgkin-Huxley neuron
     Relevant book chapters:
     - http://neuronaldynamics.epfl.ch/online/Ch2.S2.html
     """
+
+    default_neuron_parameters = {
+            'E_leak': -10.6 * mV,
+            'g_leak': 0.3 * msiemens,
+            'C': 1 * ufarad,
+            'EK': -12 * mV,
+            'ENa': 115 * mV,
+            'gK': 36 * msiemens,
+            'gNa': 120 * msiemens,
+            'refractory_period': 2.0 * ms,
+            'V_spike': 20 * mV
+    }
+
+    neuron_model_defns = {
+        'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + gNa*m**3*h*(ENa-vm) + gK*n**4*(EK-vm)',
+        'NEURON_MODEL_EQS':
+        '''
+        alphah = .07*exp(-.05*vm/mV)/ms : Hz
+        alpham = .1*(25*mV-vm)/(exp(2.5-.1*vm/mV)-1)/mV/ms : Hz
+        alphan = .01*(10*mV-vm)/(exp(1-.1*vm/mV)-1)/mV/ms : Hz
+        betah = 1./(1+exp(3.-.1*vm/mV))/ms : Hz
+        betam = 4*exp(-.0556*vm/mV)/ms : Hz
+        betan = .125*exp(-.0125*vm/mV)/ms : Hz
+        dh/dt = alphah*(1-h)-betah*h : 1
+        dm/dt = alpham*(1-m)-betam*m : 1
+        dn/dt = alphan*(1-n)-betan*n : 1
+        '''
+    }
+
+    def __init__(self):
+
+        super().__init__()
+        self.threshold_condition = 'vm > V_spike'
+        self.reset_statements = ''
+        self.integration_method = 'exponential_euler'
+        self.initial_values = {'m': 0.05, 'h': 0.60, 'n': 0.32}
 
     def plot_data(self, state_monitor, title=None):
         """Plots the state_monitor variables ["vm", "I_e", "m", "n", "h"] vs. time.
@@ -808,13 +720,111 @@ class HodgkinHuxleyNeuron(object):
 
         return st_mon
 
-    def getting_started(self):
+    def getting_started_hh(self):
         """
         An example to quickly get started with the Hodgkin-Huxley module.
         """
         current = input_factory.get_step_current(10, 45, ms, 7.2 * b2.uA)
         state_monitor = self.simulate_HH_neuron(current, 70 * ms)
         self.plot_data(state_monitor, title="HH Neuron, step current")
+
+
+class FitzhughNagumo(object):
+    """
+    This file implements functions to simulate and analyze
+    Fitzhugh-Nagumo type differential equations with Brian2.
+    Relevant book chapters:
+    - http://neuronaldynamics.epfl.ch/online/Ch4.html
+    - http://neuronaldynamics.epfl.ch/online/Ch4.S3.html.
+    """
+
+    def get_trajectory(self, v0=0., w0=0., I=0., eps=0.1, a=2.0, tend=500.):
+        """Solves the following system of FitzHugh Nagumo equations
+        for given initial conditions:
+        dv/dt = 1/1ms * v * (1-v**2) - w + I
+        dw/dt = eps * (v + 0.5 * (a - w))
+        Args:
+            v0: Intial condition for v [mV]
+            w0: Intial condition for w [mV]
+            I: Constant input [mV]
+            eps: Inverse time constant of the recovery variable w [1/ms]
+            a: Offset of the w-nullcline [mV]
+            tend: Simulation time [ms]
+        Returns:
+            tuple: (t, v, w) tuple for solutions
+        """
+
+        eqs = """
+        I_e : amp
+        dv/dt = 1/ms * ( v * (1 - (v**2) / (mV**2) ) - w + I_e * Mohm ) : volt
+        dw/dt = eps/ms * (v + 0.5 * (a * mV - w)) : volt
+        """
+
+        neuron = b2.NeuronGroup(1, eqs, method="euler")
+
+        # state initialization
+        neuron.v = v0 * mV
+        neuron.w = w0 * mV
+
+        # set input current
+        neuron.I_e = I * b2.nA
+
+        # record states
+        rec = b2.StateMonitor(neuron, ["v", "w"], record=True)
+
+        # run the simulation
+        b2.run(tend * ms)
+
+        return (rec.t / ms, rec.v[0] / mV, rec.w[0] / mV)
+
+    def plot_flow(self, I=0., eps=0.1, a=2.0):
+        """Plots the phase plane of the Fitzhugh-Nagumo model
+        for given model parameters.
+        Args:
+            I: Constant input [mV]
+            eps: Inverse time constant of the recovery variable w [1/ms]
+            a: Offset of the w-nullcline [mV]
+        """
+
+        # define the interval spanned by voltage v and recovery variable w
+        # to produce the phase plane
+        vv = np.arange(-2.5, 2.5, 0.2)
+        ww = np.arange(-2.5, 5.5, 0.2)
+        (VV, WW) = np.meshgrid(vv, ww)
+
+        # Compute derivative of v and w according to FHN equations
+        # and velocity as vector norm
+        dV = VV * (1. - (VV ** 2)) - WW + I
+        dW = eps * (VV + 0.5 * (a - WW))
+        vel = np.sqrt(dV ** 2 + dW ** 2)
+
+        # Use quiver function to plot the phase plane
+        plt.quiver(VV, WW, dV, dW, vel)
+
+    def get_fixed_point(self, I=0., eps=0.1, a=2.0):
+        """Computes the fixed point of the FitzHugh Nagumo model
+        as a function of the input current I.
+        We solve the 3rd order poylnomial equation:
+        v**3 + V + a - I0 = 0
+        Args:
+            I: Constant input [mV]
+            eps: Inverse time constant of the recovery variable w [1/ms]
+            a: Offset of the w-nullcline [mV]
+        Returns:
+            tuple: (v_fp, w_fp) fixed point of the equations
+        """
+
+        # Use poly1d function from numpy to compute the
+        # roots of 3rd order polynomial
+        P = np.poly1d([1, 0, 1, (a - I)], variable="x")
+
+        # take only the real root
+        v_fp = np.real(P.r[np.isreal(P.r)])[0]
+        w_fp = 2. * v_fp + a
+
+        return (v_fp, w_fp)
+
+
 
 
 class passive_cable(object):
@@ -1071,102 +1081,6 @@ class _NeuronTypeTwo(NeuronAbstract):
 
         self.neuron.namespace["a"] = 1.25
         self.neuron.namespace["tau"] = 15.6 * ms
-
-
-class FitzhughNagumo(object):
-    """
-    This file implements functions to simulate and analyze
-    Fitzhugh-Nagumo type differential equations with Brian2.
-    Relevant book chapters:
-    - http://neuronaldynamics.epfl.ch/online/Ch4.html
-    - http://neuronaldynamics.epfl.ch/online/Ch4.S3.html.
-    """
-
-    def get_trajectory(self, v0=0., w0=0., I=0., eps=0.1, a=2.0, tend=500.):
-        """Solves the following system of FitzHugh Nagumo equations
-        for given initial conditions:
-        dv/dt = 1/1ms * v * (1-v**2) - w + I
-        dw/dt = eps * (v + 0.5 * (a - w))
-        Args:
-            v0: Intial condition for v [mV]
-            w0: Intial condition for w [mV]
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-            tend: Simulation time [ms]
-        Returns:
-            tuple: (t, v, w) tuple for solutions
-        """
-
-        eqs = """
-        I_e : amp
-        dv/dt = 1/ms * ( v * (1 - (v**2) / (mV**2) ) - w + I_e * Mohm ) : volt
-        dw/dt = eps/ms * (v + 0.5 * (a * mV - w)) : volt
-        """
-
-        neuron = b2.NeuronGroup(1, eqs, method="euler")
-
-        # state initialization
-        neuron.v = v0 * mV
-        neuron.w = w0 * mV
-
-        # set input current
-        neuron.I_e = I * b2.nA
-
-        # record states
-        rec = b2.StateMonitor(neuron, ["v", "w"], record=True)
-
-        # run the simulation
-        b2.run(tend * ms)
-
-        return (rec.t / ms, rec.v[0] / mV, rec.w[0] / mV)
-
-    def plot_flow(self, I=0., eps=0.1, a=2.0):
-        """Plots the phase plane of the Fitzhugh-Nagumo model
-        for given model parameters.
-        Args:
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-        """
-
-        # define the interval spanned by voltage v and recovery variable w
-        # to produce the phase plane
-        vv = np.arange(-2.5, 2.5, 0.2)
-        ww = np.arange(-2.5, 5.5, 0.2)
-        (VV, WW) = np.meshgrid(vv, ww)
-
-        # Compute derivative of v and w according to FHN equations
-        # and velocity as vector norm
-        dV = VV * (1. - (VV ** 2)) - WW + I
-        dW = eps * (VV + 0.5 * (a - WW))
-        vel = np.sqrt(dV ** 2 + dW ** 2)
-
-        # Use quiver function to plot the phase plane
-        plt.quiver(VV, WW, dV, dW, vel)
-
-    def get_fixed_point(self, I=0., eps=0.1, a=2.0):
-        """Computes the fixed point of the FitzHugh Nagumo model
-        as a function of the input current I.
-        We solve the 3rd order poylnomial equation:
-        v**3 + V + a - I0 = 0
-        Args:
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-        Returns:
-            tuple: (v_fp, w_fp) fixed point of the equations
-        """
-
-        # Use poly1d function from numpy to compute the
-        # roots of 3rd order polynomial
-        P = np.poly1d([1, 0, 1, (a - I)], variable="x")
-
-        # take only the real root
-        v_fp = np.real(P.r[np.isreal(P.r)])[0]
-        w_fp = 2. * v_fp + a
-
-        return (v_fp, w_fp)
 
 
 # TODO:

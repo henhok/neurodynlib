@@ -39,32 +39,35 @@ class NeuronSuperclass(object):
 
     # General equation for neuron models
     membrane_eq_template = '''
-    dvm/dt = (($I_NEURON_MODEL $MISC_CURRENTS $I_TONIC)/C) $VM_NOISE : volt $BRIAN2_FLAGS
-    $NEURON_MODEL_EQ
-    $MISC_CURRENT_EQS
-    $TONIC_EQ
+    dvm/dt = (($I_NEURON_MODEL $SYN_CURRENTS $EXT_CURRENTS)/C) $VM_NOISE : volt $BRIAN2_FLAGS
+    $NEURON_MODEL_EQS
+    $SYN_CURRENTS_EQS
+    $EXT_CURRENTS_EQS
     '''
-    all_template_placeholders = ['I_NEURON_MODEL', 'MISC_CURRENTS', 'I_TONIC', 'VM_NOISE',
-                                 'BRIAN2_FLAGS', 'NEURON_MODEL_EQ', 'MISC_CURRENT_EQS', 'TONIC_EQ']
+    all_template_placeholders = ['I_NEURON_MODEL', 'SYN_CURRENTS', 'EXT_CURRENTS', 'VM_NOISE',
+                                 'BRIAN2_FLAGS', 'NEURON_MODEL_EQS', 'SYN_CURRENTS_EQS',
+                                 'EXT_CURRENTS_EQS']
 
     # Default components
     default_soma_defns = {
-        'I_NEURON_MODEL': '',
-        'NEURON_MODEL_EQ': '',
-        'I_TONIC': '',  # + tonic_current*(1-exp(-t/(50*msecond)))
-        'TONIC_EQ': '',
-        'VM_NOISE': '',  # + noise_sigma*xi*taum_soma**-0.5
+        # 'I_NEURON_MODEL': '',
+        # 'NEURON_MODEL_EQ': '',
+        # 'EXT_CURRENTS': '+ I_stim(t,i)',  # + tonic_current*(1-exp(-t/(50*msecond)))
+        # 'EXT_CURRENTS_EQS': 'I_ext : amp',
+        # 'VM_NOISE': '',  # + noise_sigma*xi*taum_soma**-0.5
         'BRIAN2_FLAGS': '(unless refractory)'
     }
 
     default_dendrite_defns = {
-        'I_TONIC': '',
-        'TONIC_EQ': '',
-        'VM_NOISE': '',
-        'BRIAN2_FLAGS': '' # Be careful! "Unless refractory" in dendrites will not cause an error, but behavior is WRONG
+        # 'EXT_CURRENTS': '',
+        # 'EXT_CURRENTS_EQS': '',
+        # 'VM_NOISE': '',
+        'BRIAN2_FLAGS': ''  # Be careful! "Unless refractory" in dendrites will not cause an error, but behavior is WRONG
     }
 
-    def __init__(self, neuron_model_defns={}, is_pyramidal=False, compartment='soma'): #, custom_strings=None):
+    default_neuron_parameters = {}
+
+    def __init__(self, is_pyramidal=False, compartment='soma'): #, custom_strings=None):
 
         self.is_pyramidal = is_pyramidal
         self.compartment = compartment
@@ -82,26 +85,43 @@ class NeuronSuperclass(object):
             else:
                 self.full_model_defns = dict(NeuronSuperclass.default_dendrite_defns)
 
-            self.full_model_defns.update(neuron_model_defns)
+            self.full_model_defns.update(self.neuron_model_defns)  # Model-specific definitions
 
         # Then, if we are dealing with a point neuron:
         else:
             self.full_model_defns = dict(NeuronSuperclass.default_soma_defns)
-            self.full_model_defns.update(neuron_model_defns)
+            self.full_model_defns.update(self.neuron_model_defns)  # Model-specific definitions
 
         # Update the generic template with neuron model-specific strings
         # _Safe_ substitute because empty keys are allowed (will be dealt with when the eqs are actually needed)
         self.neuron_eqs_template = Template(NeuronSuperclass.membrane_eq_template)
         self.neuron_eqs_template = Template(self.neuron_eqs_template.safe_substitute(self.full_model_defns))
 
-        # Add an empty dict for default parameters
-        self.default_neuron_parameters = {}
+        # Get a clean string with empty placeholders removed
+        self.neuron_eqs = self.get_membrane_equation()
 
-    def get_membrane_equation(self, base_dict=None, return_string=True):
+        # Add an empty dict for default parameters
+        self.neuron_parameters = self.default_neuron_parameters
+
+        # Add default threshold condition, reset statements and integration method
+        self.threshold_condition = 'vm > V_threshold'
+        self.reset_statements = 'vm = V_reset'
+        self.integration_method = 'euler'
+
+        # Add default initial values
+        self.initial_values = {}
+
+    def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
+
+        # Do ad hoc substitutions that don't affect the object's template
+        if substitute_ad_hoc is not None:
+            neuron_eqs_template2 = Template(self.neuron_eqs_template.safe_substitute(substitute_ad_hoc))
+        else:
+            neuron_eqs_template2 = self.neuron_eqs_template
 
         # Deal with extra placeholders in the eq template
         nullify_placeholders_dict = {k: '' for k in NeuronSuperclass.all_template_placeholders}
-        neuron_eqs_template_wo_placeholders = self.neuron_eqs_template.substitute(nullify_placeholders_dict)
+        neuron_eqs_template_wo_placeholders = neuron_eqs_template2.substitute(nullify_placeholders_dict)
 
         # Stringify the equations
         neuron_eqs_string = str(neuron_eqs_template_wo_placeholders)
@@ -112,10 +132,16 @@ class NeuronSuperclass(object):
         if return_string is True:
             return model_membrane_equation
         else:
-            substitutables = {k: k+'_'+self.compartment for k in self.comp_specific_vars}
-            compartment_eq = b2.Equations(self.model_membrane_equation, **substitutables)
+            #substitutables = {k: k+'_'+self.compartment for k in self.comp_specific_vars}
+            #compartment_eq = b2.Equations(self.model_membrane_equation, **substitutables)
+            return b2.Equations(model_membrane_equation)
 
-            return compartment_eq
+    def get_neuron_equations(self):
+        s = self.get_membrane_equation(return_string=True)
+        return b2.Equations(s)
+
+    def get_eqs_template(self):
+        return self.neuron_eqs_template
 
     def get_dict(self, base_dict=None, specific_compartment='XX'):
 
@@ -159,32 +185,41 @@ class NeuronSuperclass(object):
         # eqs, params = a.get_model_definitions()
         raise NotImplementedError
 
-    def get_default_parameters(self):
-        return self.default_neuron_parameters
+    def get_neuron_parameters(self):
+        return self.neuron_parameters
+
+    def set_neuron_parameters(self, **kwargs):
+        self.neuron_parameters.update(kwargs)
 
     def print_default_parameters(self):
-        print(self.default_neuron_parameters)  # Could be made fancier like in Neurodynex LIF (Resting potential: blabla, ...)
+        print(self.neuron_parameters)  # Could be made fancier like in Neurodynex LIF (Resting potential: blabla, ...)
 
-    def get_reset_condition(self):
-        return self.reset_cond
+    def get_reset_statements(self):
+        return self.reset_statements
 
     def get_threshold_condition(self):
-        return self.get_threshold_cond
+        return self.get_threshold_condition
 
-    def simulate_neuron(self, I_stim = input_factory.get_zero_current(), **kwargs):
+    def get_initial_values(self):  # Model-specific
+        return {'vm': self.neuron_parameters['E_leak']}
 
-        neuron_parameters = dict(self.default_neuron_parameters)  # Make a copy of default parameters
+    def simulate_neuron(self, I_stim=input_factory.get_zero_current(), simulation_time=1000*ms, **kwargs):
+
+        neuron_parameters = dict(self.neuron_parameters)  # Make a copy of default parameters
         neuron_parameters.update(kwargs)
+        refractory_period = neuron_parameters['refractory_period']
+
+        eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_stim(t,i)'})
 
         # Create a neuron group
         neuron = b2.NeuronGroup(1,
-                                model=self.neuron_eqs, namespace=neuron_parameters,
-                                reset=self.reset_cond, threshold=self.threshold_cond,
-                                refractory=self.refractory_period, method=self.integration_method)
+                                model=eqs, namespace=neuron_parameters,
+                                reset=self.reset_statements, threshold=self.threshold_condition,
+                                refractory=refractory_period, method=self.integration_method)
 
         # Set initial values
-        for key, value in self.initial_values:
-            eval('neuron.' + key + ' = ' + repr(value))
+        initial_values = self.get_initial_values()
+        neuron.set_states(initial_values)
 
         # Set what to monitor
         state_monitor = b2.StateMonitor(neuron, ["vm"], record=True)
@@ -192,9 +227,37 @@ class NeuronSuperclass(object):
 
         # Run the simulation
         net = b2.Network(neuron, state_monitor, spike_monitor)
-        net.run(1000*ms)
+        net.run(simulation_time)
 
         return state_monitor, spike_monitor
+
+    def getting_started(self):
+        # specify step current
+        step_current = input_factory.get_step_current(t_start=100, t_end=200, unit_time=ms, amplitude=1.2 * namp)
+
+        # run
+        state_monitor, spike_monitor = self.simulate_neuron(I_stim=step_current, simulation_time=300 * ms)
+
+        # plot the membrane voltage
+        firing_threshold = self.neuron_parameters['V_threshold']
+        plot_tools.plot_voltage_and_current_traces(state_monitor, step_current,
+                                                   title="Step current", firing_threshold=firing_threshold)
+        print("nr of spikes: {}".format(len(spike_monitor.t)))
+        plt.show()
+
+        # second example: sinusoidal current. note the higher resolution 0.1 * ms
+        sinusoidal_current = input_factory.get_sinusoidal_current(
+            500, 1500, unit_time=0.1 * ms,
+            amplitude=2.5 * namp, frequency=150 * Hz, direct_current=2. * namp)
+        # run
+        state_monitor, spike_monitor = self.simulate_neuron(
+            I_stim=sinusoidal_current, simulation_time=200 * ms)
+        # plot the membrane voltage
+        plot_tools.plot_voltage_and_current_traces(
+            state_monitor, sinusoidal_current, title="Sinusoidal input current",
+            firing_threshold=firing_threshold)
+        print("nr of spikes: {}".format(spike_monitor.count[0]))
+        plt.show()
 
 
 class LifNeuron(NeuronSuperclass):
@@ -214,21 +277,19 @@ class LifNeuron(NeuronSuperclass):
     ABSOLUTE_REFRACTORY_PERIOD = 2.0 * ms
     __OBFUSCATION_FACTORS = [543, 622, 9307, 584, 2029, 211]
 
-    def __init__(self):
-
-        neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + I_ext'}
-        super().__init__(neuron_model_defns)
-
-        self.default_neuron_parameters = {
+    default_neuron_parameters = {
             'E_leak': -70 * mV,
             'V_reset': -65 * mV,
             'V_threshold': -50 * mV,
             'g_leak': 5 * nS,
             'C': 100 * pF,
             'refractory_period': 2.0 * ms
-        }
+    }
 
-        self.neuron_eqs = self.get_membrane_equation()
+    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm)'}
+
+    def __init__(self):
+        super().__init__()
 
     def simulate_LIF_neuron(self, I_stim=input_factory.get_zero_current(),
                             simulation_time=5 * ms,
@@ -354,7 +415,7 @@ class LifNeuron(NeuronSuperclass):
             abs_refractory_period=vals[5])
         return state_monitor, spike_monitor
 
-    def getting_started(self):
+    def getting_started_lif(self):
         """
         An example to quickly get started with the LIF module.
         Returns:
@@ -403,12 +464,24 @@ class EifNeuron(NeuronSuperclass):
     # a technical threshold to tell the algorithm when to reset vm to v_reset
     FIRING_THRESHOLD_v_spike = -30. * mV
 
+    default_neuron_parameters = {
+            'E_leak': -70 * mV,
+            'V_reset': -65 * mV,
+            'V_threshold': -50 * mV,
+            'g_leak': 5 * nS,
+            'C': 100 * pF,
+            'DeltaT': 2 * mV,
+            'refractory_period': 2.0 * ms,
+            'V_cut': 20 * mV
+    }
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + g_leak * DeltaT * exp((vm-V_threshold) / DeltaT)'}
+
     def __init__(self):
 
-        neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + g_leak * delta_T * exp((vm-VT) / delta_T) + I_stim(t,i)',
-                              'NEURON_MODEL_EQ': ''}
-        super().__init__(neuron_model_defns)
-        self.neuron_eqs = self.get_membrane_equation()
+        super().__init__()
+        self.threshold_condition = 'vm > V_cut'
+
 
     def simulate_exponential_IF_neuron(self,
             tau=MEMBRANE_TIME_SCALE_tau,
@@ -460,7 +533,7 @@ class EifNeuron(NeuronSuperclass):
         return voltage_monitor, spike_monitor
 
 
-    def getting_started(self):
+    def getting_started_eif(self):
         """
         A simple example
         """

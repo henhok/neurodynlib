@@ -263,7 +263,7 @@ class NeuronSuperclass(object):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
         plt.show()
 
-    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA, step_size=10*pA):
+    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA, step_size=10*pA, plot=True):
 
         # Compute current steps
         steps = np.arange(min_current, max_current, step_size) * amp
@@ -272,7 +272,8 @@ class NeuronSuperclass(object):
         # Prepare params and eqs
         neuron_parameters = self.neuron_parameters
         refractory_period = neuron_parameters['refractory_period']
-        eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_ext'})
+        eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_ext',
+                                                            'EXT_CURRENTS_EQS': 'I_ext : amp'})
 
         # Create a neuron group
         neurons = b2.NeuronGroup(N_steps,
@@ -290,14 +291,24 @@ class NeuronSuperclass(object):
         spike_monitor = b2.SpikeMonitor(neurons)
 
         # Run the simulation
-        net = b2.Network(neurons, state_monitor, spike_monitor)
+        net = b2.Network(neurons, spike_monitor)
         net.run(500*ms)
 
         # Add step current
         neurons.I_ext = steps
         net.run(1000 * ms)
 
-        return spike_monitor.count
+        counts = spike_monitor.count
+
+        # Plot/return the f-I curve
+        if plot is True:
+            plt.plot(steps/pA, counts)
+            plt.title('f-I curve')
+            plt.ylabel('Firing rate [Hz]')
+            plt.xlabel('Current [pA]')
+            plt.show()
+        else:
+            return counts
 
     def plot_states(self, state_monitor):
 
@@ -484,7 +495,7 @@ class AdexNeuron(NeuronSuperclass):
         super().__init__()
         self.threshold_condition = 'vm > V_cut'
         self.reset_statements = 'vm = V_reset; w += b'
-        self.initial_values = {'w': 0*pA}
+        self.initial_values = {'vm': None, 'w': 0*pA}
         self.states_to_monitor = ['vm', 'w']
 
     # This function implement Adaptive Exponential Leaky Integrate-And-Fire neuron model
@@ -506,13 +517,15 @@ class AdexNeuron(NeuronSuperclass):
         plt.subplot(2, 2, 2)
         plt.plot(state_monitor.vm[0] / mV, state_monitor.w[0] / pA, lw=2)
         plt.xlabel("u [mV]")
-        plt.ylabel("w [pAmp]")
+        plt.ylabel("w [pA]")
         plt.title("Phase plane representation")
         plt.subplot(2, 2, 3)
         plt.plot(state_monitor.t / ms, state_monitor.w[0] / pA, lw=2)
         plt.xlabel("t [ms]")
-        plt.ylabel("w [pAmp]")
+        plt.ylabel("w [pA]")
         plt.title("Adaptation current")
+
+        plt.tight_layout(w_pad=0.5, h_pad=1.5)
         plt.show()
 
 
@@ -556,7 +569,7 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
         self.threshold_condition = 'vm > V_spike'
         self.reset_statements = ''
         self.integration_method = 'exponential_euler'
-        self.initial_values = {'m': 0.05, 'h': 0.60, 'n': 0.32}
+        self.initial_values = {'m': 0.05, 'h': 0.60, 'n': 0.32, 'vm': 0*mV}
         self.states_to_monitor = ['vm', 'm', 'n', 'h']
 
     def plot_states(self, state_monitor):
@@ -1047,7 +1060,6 @@ class _NeuronTypeTwo(NeuronAbstract):
 # - run/simulate_XX_neuron - use consistent naming
 # - run: ability to choose which variables to monitor
 # - Joustavampi templating systeemi
-# - Default neuroniparametrit pitää pystyä vaihtamaan ja sitten mahdollisuus overraidata simulate(param1, param2,...)
 
 if __name__ == '__main__':
     # fixed_values = {'C': 110 * pF, 'g_leak': 3.1 * nS, 'E_leak': -70 * mV, 'Vcut': 20 * mV, 'refr_time': 4 * ms}

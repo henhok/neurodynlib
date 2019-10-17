@@ -263,7 +263,7 @@ class NeuronSuperclass(object):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
         plt.show()
 
-    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA, step_size=10*pA, plot=True):
+    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA, step_size=10*pA, max_rate=None, plot=True):
 
         # Compute current steps
         steps = np.arange(min_current, max_current, step_size) * amp
@@ -306,6 +306,8 @@ class NeuronSuperclass(object):
             plt.title('f-I curve')
             plt.ylabel('Firing rate [Hz]')
             plt.xlabel('Current [pA]')
+            if max_rate is not None:
+                plt.ylim([0, max_rate])
             plt.show()
         else:
             return counts
@@ -1054,12 +1056,6 @@ class _NeuronTypeTwo(NeuronAbstract):
         self.neuron.namespace["a"] = 1.25
         self.neuron.namespace["tau"] = 15.6 * ms
 
-
-# TODO:
-# - Make neuron parameters more accessible
-# - run/simulate_XX_neuron - use consistent naming
-# - run: ability to choose which variables to monitor
-# - Joustavampi templating systeemi
 
 if __name__ == '__main__':
     # fixed_values = {'C': 110 * pF, 'g_leak': 3.1 * nS, 'E_leak': -70 * mV, 'Vcut': 20 * mV, 'refr_time': 4 * ms}

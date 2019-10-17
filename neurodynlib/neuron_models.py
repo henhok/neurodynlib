@@ -109,7 +109,8 @@ class NeuronSuperclass(object):
         self.integration_method = 'euler'
 
         # Add default initial values
-        self.initial_values = {}
+        self.initial_values = {'vm': None}  # vm: None => E_leak will be used
+        self.states_to_monitor = ['vm']
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
 
@@ -157,12 +158,6 @@ class NeuronSuperclass(object):
     def add_vm_noise(self, noise_sigma):
         raise NotImplementedError
 
-    def add_current(self, current_name, current_equations):
-        # a.add_current('I_adaptive', '''dI_adaptive/dt = ...''')
-        replace_dict = {'MISC_CURRENTS': ' + ' + current_name + ' $MISC_CURRENTS',
-                        'MISC_CURRENT_EQS': current_equations + '\n$MISC_CURRENT_EQS'}
-        self.neuron_eqs_template = Template(self.neuron_eqs_template.safe_substitute(replace_dict))
-
     def add_receptors(self, receptor_name, receptor_equations):
         # assert exc_model in NeuronSuperclass.ExcModelNames, \
         #     "Undefined excitation model!"
@@ -185,14 +180,14 @@ class NeuronSuperclass(object):
         # eqs, params = a.get_model_definitions()
         raise NotImplementedError
 
+    def get_parameter_names(self):
+        return self.default_neuron_parameters.keys()
+
     def get_neuron_parameters(self):
         return self.neuron_parameters
 
     def set_neuron_parameters(self, **kwargs):
         self.neuron_parameters.update(kwargs)
-
-    def print_default_parameters(self):
-        print(self.neuron_parameters)  # Could be made fancier like in Neurodynex LIF (Resting potential: blabla, ...)
 
     def get_reset_statements(self):
         return self.reset_statements
@@ -202,9 +197,14 @@ class NeuronSuperclass(object):
 
     def get_initial_values(self):  # Model-specific
         init_vals = dict(self.initial_values)
-        vm_dict = {'vm': self.neuron_parameters['E_leak']}
-        init_vals.update(vm_dict)
+        if init_vals['vm'] is None:
+            vm_dict = {'vm': self.neuron_parameters['E_leak']}
+            init_vals.update(vm_dict)
+
         return init_vals
+
+    def get_states_to_monitor(self):
+        return self.states_to_monitor
 
     def simulate_neuron(self, I_stim=input_factory.get_zero_current(), simulation_time=1000*ms, **kwargs):
 
@@ -225,7 +225,7 @@ class NeuronSuperclass(object):
         neuron.set_states(initial_values)
 
         # Set what to monitor
-        state_monitor = b2.StateMonitor(neuron, ["vm"], record=True)
+        state_monitor = b2.StateMonitor(neuron, self.get_states_to_monitor(), record=True)
         spike_monitor = b2.SpikeMonitor(neuron)
 
         # Run the simulation
@@ -234,9 +234,10 @@ class NeuronSuperclass(object):
 
         return state_monitor, spike_monitor
 
-    def getting_started(self):
+    def getting_started(self, step_amplitude=1.2*nA, sine_amplitude=2.5*nA, sine_freq=150*Hz, sine_dc=2*nA):
+        # Default here are for the LIF neuron
         # specify step current
-        step_current = input_factory.get_step_current(t_start=100, t_end=200, unit_time=ms, amplitude=1.2 * namp)
+        step_current = input_factory.get_step_current(t_start=100, t_end=200, unit_time=ms, amplitude=step_amplitude)
 
         # run
         state_monitor, spike_monitor = self.simulate_neuron(I_stim=step_current, simulation_time=300 * ms)
@@ -250,11 +251,11 @@ class NeuronSuperclass(object):
 
         # second example: sinusoidal current. note the higher resolution 0.1 * ms
         sinusoidal_current = input_factory.get_sinusoidal_current(
-            500, 1500, unit_time=0.1 * ms,
-            amplitude=2.5 * namp, frequency=150 * Hz, direct_current=2. * namp)
+            1000, 2000, unit_time=0.1 * ms,
+            amplitude=sine_amplitude, frequency=sine_freq, direct_current=sine_dc)
         # run
         state_monitor, spike_monitor = self.simulate_neuron(
-            I_stim=sinusoidal_current, simulation_time=200 * ms)
+            I_stim=sinusoidal_current, simulation_time=300 * ms)
         # plot the membrane voltage
         plot_tools.plot_voltage_and_current_traces(
             state_monitor, sinusoidal_current, title="Sinusoidal input current",
@@ -262,33 +263,66 @@ class NeuronSuperclass(object):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
         plt.show()
 
-    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA):
-        raise NotImplementedError
+    def plot_fi_curve(self, min_current=0*pA, max_current=1*nA, step_size=10*pA):
+
+        # Compute current steps
+        steps = np.arange(min_current, max_current, step_size) * amp
+        N_steps = len(steps)
+
+        # Prepare params and eqs
+        neuron_parameters = self.neuron_parameters
+        refractory_period = neuron_parameters['refractory_period']
+        eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_ext'})
+
+        # Create a neuron group
+        neurons = b2.NeuronGroup(N_steps,
+                                model=eqs, namespace=neuron_parameters,
+                                reset=self.reset_statements, threshold=self.threshold_condition,
+                                refractory=refractory_period, method=self.integration_method)
+
+        # Set initial values
+        initial_values = self.get_initial_values()
+        neurons.set_states(initial_values)
+        neurons.I_ext = 0*pA
+
+        # Set what to monitor
+        #state_monitor = b2.StateMonitor(neurons, self.get_states_to_monitor(), record=True)
+        spike_monitor = b2.SpikeMonitor(neurons)
+
+        # Run the simulation
+        net = b2.Network(neurons, state_monitor, spike_monitor)
+        net.run(500*ms)
+
+        # Add step current
+        neurons.I_ext = steps
+        net.run(1000 * ms)
+
+        return spike_monitor.count
+
+    def plot_states(self, state_monitor):
+
+        plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=1)
+        plt.title('Membrane voltage')
+        plt.xlabel("time [ms]")
+        plt.ylabel("vm [mV]")
+        plt.show()
 
 
 class LifNeuron(NeuronSuperclass):
     """
-    This file implements a leaky intergrate-and-fire (LIF) model.
-    You can inject a step current or sinusoidal current into
-    neuron using LIF_Step() or LIF_Sinus() methods respectively.
-    Relevant book chapters:
-    - http://neuronaldynamics.epfl.ch/online/Ch1.S3.html
+    Leaky Intergrate-and-Fire model.
+    See Neuronal Dynamics, `Chapter 1 Section 3 <http://neuronaldynamics.epfl.ch/online/Ch1.S3.html>`_
     """
 
-    V_REST = -70 * mV
-    V_RESET = -65 * mV
-    FIRING_THRESHOLD = -50 * mV
-    MEMBRANE_RESISTANCE = 10. * Mohm
-    MEMBRANE_TIME_SCALE = 8. * ms
-    ABSOLUTE_REFRACTORY_PERIOD = 2.0 * ms
     __OBFUSCATION_FACTORS = [543, 622, 9307, 584, 2029, 211]
 
+    # The large g_leak and capacitance are from the original code
     default_neuron_parameters = {
             'E_leak': -70 * mV,
             'V_reset': -65 * mV,
             'V_threshold': -50 * mV,
-            'g_leak': 5 * nS,
-            'C': 100 * pF,
+            'g_leak': 100 * nS,
+            'C': 800 * pF,
             'refractory_period': 2.0 * ms
     }
 
@@ -378,34 +412,26 @@ class EifNeuron(NeuronSuperclass):
     See Neuronal Dynamics, `Chapter 5 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch5.S2.html>`_
     """
 
-    # default values.
-    MEMBRANE_TIME_SCALE_tau = 12.0 * ms
-    MEMBRANE_RESISTANCE_R = 20.0 * Mohm
-    V_REST = -65.0 * mV
-    V_RESET = -60.0 * mV
-    RHEOBASE_THRESHOLD_v_rh = -55.0 * mV
-    SHARPNESS_delta_T = 2.0 * mV
-
-    # a technical threshold to tell the algorithm when to reset vm to v_reset
-    FIRING_THRESHOLD_v_spike = -30. * mV
-
+    # The large g_leak and capacitance come from the original code
     default_neuron_parameters = {
-            'E_leak': -70 * mV,
-            'V_reset': -65 * mV,
-            'V_threshold': -50 * mV,
-            'g_leak': 5 * nS,
-            'C': 100 * pF,
+            'E_leak': -65.0 * mV,
+            'V_reset': -60.0 * mV,
+            'V_threshold': -55.0 * mV,
+            'g_leak': 50 * nS,
+            'C': 600 * pF,
             'DeltaT': 2 * mV,
             'refractory_period': 2.0 * ms,
-            'V_cut': 20 * mV
+            'V_cut': -30.0 * mV
     }
 
     neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + g_leak * DeltaT * exp((vm-V_threshold) / DeltaT)'}
 
     def __init__(self):
-
         super().__init__()
         self.threshold_condition = 'vm > V_cut'
+
+    def getting_started(self, step_amplitude=0.8*nA, sine_amplitude=1.6*nA, sine_freq=150*Hz, sine_dc=1.3*nA):
+        super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
 
     def _min_curr_expl(self):
 
@@ -430,38 +456,24 @@ class EifNeuron(NeuronSuperclass):
 
 class AdexNeuron(NeuronSuperclass):
     """
-    Implementation of the Adaptive Exponential Integrate-and-Fire model.
-    See Neuronal Dynamics
-    `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
+    Adaptive Exponential Integrate-and-Fire model.
+    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
     """
 
-    # default values. (see Table 6.1, Initial Burst)
+    # Default values (see Table 6.1, Initial Burst)
     # http://neuronaldynamics.epfl.ch/online/Ch6.S2.html#Ch6.F3
-    MEMBRANE_TIME_SCALE_tau_m = 5 * ms
-    MEMBRANE_RESISTANCE_R = 500 * Mohm
-    V_REST = -70.0 * mV
-    V_RESET = -51.0 * mV
-    RHEOBASE_THRESHOLD_v_rh = -50.0 * mV
-    SHARPNESS_delta_T = 2.0 * mV
-    ADAPTATION_VOLTAGE_COUPLING_a = 0.5 * b2.nS
-    ADAPTATION_TIME_CONSTANT_tau_w = 100.0 * ms
-    SPIKE_TRIGGERED_ADAPTATION_INCREMENT_b = 7.0 * pA
-
-    # a technical threshold to tell the algorithm when to reset vm to v_reset
-    FIRING_THRESHOLD_v_spike = -30. * mV
-
     default_neuron_parameters = {
-            'E_leak': -70 * mV,
-            'V_reset': -65 * mV,
-            'V_threshold': -50 * mV,
-            'g_leak': 5 * nS,
-            'C': 100 * pF,
+            'E_leak': -70.0 * mV,
+            'V_reset': -51.0 * mV,
+            'V_threshold': -50.0 * mV,
+            'g_leak': 2 * nS,
+            'C': 10 * pF,
             'DeltaT': 2 * mV,
-            'a': 2 * nS,
-            'b': 20 * pA,
-            'tau_w': 30 * ms,
+            'a': 0.5 * nS,
+            'b': 7.0 * pA,
+            'tau_w': 100.0 * ms,
             'refractory_period': 2.0 * ms,
-            'V_cut': 20 * mV
+            'V_cut': -30.0 * mV
     }
 
     neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) - w + g_leak * DeltaT * exp((vm-V_threshold) / DeltaT)',
@@ -472,119 +484,42 @@ class AdexNeuron(NeuronSuperclass):
         super().__init__()
         self.threshold_condition = 'vm > V_cut'
         self.reset_statements = 'vm = V_reset; w += b'
+        self.initial_values = {'w': 0*pA}
+        self.states_to_monitor = ['vm', 'w']
 
     # This function implement Adaptive Exponential Leaky Integrate-And-Fire neuron model
-    def simulate_AdEx_neuron(self,
-            tau_m=MEMBRANE_TIME_SCALE_tau_m,
-            R=MEMBRANE_RESISTANCE_R,
-            E_leak=V_REST,
-            v_reset=V_RESET,
-            VT=RHEOBASE_THRESHOLD_v_rh,
-            a=ADAPTATION_VOLTAGE_COUPLING_a,
-            b=SPIKE_TRIGGERED_ADAPTATION_INCREMENT_b,
-            v_spike=FIRING_THRESHOLD_v_spike,
-            delta_T=SHARPNESS_delta_T,
-            tau_w=ADAPTATION_TIME_CONSTANT_tau_w,
-            I_stim=input_factory.get_zero_current(),
-            simulation_time=200 * ms):
-        r"""
-        Implementation of the AdEx model with a single adaptation variable w.
-        The Brian2 model equations are:
-        .. math::
-            \frac{dv}{dt} = (-(v-v_rest) +delta_T*exp((v-v_rheobase)/delta_T)+ R * I_stim(t,i) - R * w)/(tau_m) : volt \\
-            \frac{dw}{dt} = (a*(v-v_rest)-w)/tau_w : amp
 
-        Args:
-            tau_m (Quantity): membrane time scale
-            R (Quantity): membrane restistance
-            v_rest (Quantity): resting potential
-            v_reset (Quantity): reset potential
-            v_rheobase (Quantity): rheobase threshold
-            a (Quantity): Adaptation-Voltage coupling
-            b (Quantity): Spike-triggered adaptation current (=increment of w after each spike)
-            v_spike (Quantity): voltage threshold for the spike condition
-            delta_T (Quantity): Sharpness of the exponential term
-            tau_w (Quantity): Adaptation time constant
-            I_stim (TimedArray): Input current
-            simulation_time (Quantity): Duration for which the model is simulated
-        Returns:
-            (state_monitor, spike_monitor):
-            A b2.StateMonitor for the variables "v" and "w" and a b2.SpikeMonitor
-        """
+    def getting_started(self, step_amplitude=65*pA, sine_amplitude=125*pA, sine_freq=150*Hz, sine_dc=100*pA):
+        super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
 
-        v_spike_str = "vm>{:f}*mvolt".format(v_spike / mvolt)
-
-        # AdEx
-        # eqs = """
-        #     dv/dt = (-(v-v_rest) +delta_T*exp((v-v_rheobase)/delta_T)+ R * I_stim(t,i) - R * w)/(tau_m) : volt
-        #     dw/dt=(a*(v-v_rest)-w)/tau_w : amp
-        #     """
-        eqs = self.neuron_eqs
-        C = tau_m / R
-        g_leak = 1/R
-        noise_sigma = 0.1*mV
-        tonic_current = 0*pA
-        taum_soma = tau_m
-
-        neuron = b2.NeuronGroup(1, model=eqs, threshold=v_spike_str, reset="vm=v_reset;w+=b", method="euler")
-
-        # initial values of v and w is set here:
-        neuron.vm = E_leak
-        neuron.w = 0.0 * pA
-
-        # Monitoring membrane voltage (v) and w
-        state_monitor = b2.StateMonitor(neuron, ["vm", "w"], record=True)
-        spike_monitor = b2.SpikeMonitor(neuron)
-
-        # run the simulation
-        net = b2.Network(neuron, state_monitor, spike_monitor)
-        net.run(simulation_time)
-
-        return state_monitor, spike_monitor
-
-
-    def plot_adex_state(self, adex_state_monitor):
+    def plot_states(self, state_monitor):
         """
         Visualizes the state variables: w-t, v-t and phase-plane w-v
         Args:
-            adex_state_monitor (StateMonitor): States of "v" and "w"
+            state_monitor (StateMonitor): States of "v" and "w"
         """
         plt.subplot(2, 2, 1)
-        plt.plot(adex_state_monitor.t / ms, adex_state_monitor.vm[0] / mV, lw=2)
+        plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=2)
         plt.xlabel("t [ms]")
         plt.ylabel("u [mV]")
         plt.title("Membrane potential")
         plt.subplot(2, 2, 2)
-        plt.plot(adex_state_monitor.vm[0] / mV, adex_state_monitor.w[0] / pA, lw=2)
+        plt.plot(state_monitor.vm[0] / mV, state_monitor.w[0] / pA, lw=2)
         plt.xlabel("u [mV]")
         plt.ylabel("w [pAmp]")
         plt.title("Phase plane representation")
         plt.subplot(2, 2, 3)
-        plt.plot(adex_state_monitor.t / ms, adex_state_monitor.w[0] / pA, lw=2)
+        plt.plot(state_monitor.t / ms, state_monitor.w[0] / pA, lw=2)
         plt.xlabel("t [ms]")
         plt.ylabel("w [pAmp]")
         plt.title("Adaptation current")
         plt.show()
 
 
-    def getting_started_adex(self):
-        """
-        Simple example to get started
-        """
-
-        from neurodynlib.tools import plot_tools
-        current = input_factory.get_step_current(10, 200, 1. * ms, 65.0 * pA)
-        state_monitor, spike_monitor = self.simulate_neuron(I_stim=current, simulation_time=300 * ms)
-        plot_tools.plot_voltage_and_current_traces(state_monitor, current)
-        # self.plot_adex_state(state_monitor)
-        print("nr of spikes: {}".format(spike_monitor.count[0]))
-
-
 class HodgkinHuxleyNeuron(NeuronSuperclass):
     """
-    Implementation of a Hodgkin-Huxley neuron
-    Relevant book chapters:
-    - http://neuronaldynamics.epfl.ch/online/Ch2.S2.html
+    Implementation of a Hodgkin-Huxley neuron (with Na, K and leak channels).
+    See Neuronal Dynamics, `Chapter 2 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch2.S2.html>`_
     """
 
     default_neuron_parameters = {
@@ -622,47 +557,55 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
         self.reset_statements = ''
         self.integration_method = 'exponential_euler'
         self.initial_values = {'m': 0.05, 'h': 0.60, 'n': 0.32}
+        self.states_to_monitor = ['vm', 'm', 'n', 'h']
 
-    def plot_data(self, state_monitor, title=None):
+    def plot_states(self, state_monitor):
         """Plots the state_monitor variables ["vm", "I_e", "m", "n", "h"] vs. time.
         Args:
             state_monitor (StateMonitor): the data to plot
             title (string, optional): plot title to display
         """
 
+        plt.subplots(3, 1, sharex=True)
+
         plt.subplot(311)
         plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=2)
-
-        plt.xlabel("t [ms]")
+        plt.title('Membrane voltage')
+        #plt.xlabel("t [ms]")
         plt.ylabel("v [mV]")
         plt.grid()
 
         plt.subplot(312)
-
-        plt.plot(state_monitor.t / ms, state_monitor.m[0] / b2.volt, "black", lw=2)
-        plt.plot(state_monitor.t / ms, state_monitor.n[0] / b2.volt, "blue", lw=2)
-        plt.plot(state_monitor.t / ms, state_monitor.h[0] / b2.volt, "red", lw=2)
-        plt.xlabel("t (ms)")
-        plt.ylabel("act./inact.")
-        plt.legend(("m", "n", "h"))
+        plt.title('gNa activation (m) and inactivation (h)')
+        plt.plot(state_monitor.t / ms, state_monitor.m[0] / b2.volt, "black", lw=2, label='m')
+        plt.plot(state_monitor.t / ms, state_monitor.h[0] / b2.volt, "red", lw=2, label='h')
+        #plt.xlabel("t (ms)")
+        plt.ylabel("act./inact. [a.u.]")
+        plt.legend()
         plt.ylim((0, 1))
         plt.grid()
 
         plt.subplot(313)
-        plt.plot(state_monitor.t / ms, state_monitor.I_e[0] / b2.uamp, lw=2)
-        plt.axis((
-            0,
-            np.max(state_monitor.t / ms),
-            min(state_monitor.I_e[0] / b2.uamp) * 1.1,
-            max(state_monitor.I_e[0] / b2.uamp) * 1.1
-        ))
-
-        plt.xlabel("t [ms]")
-        plt.ylabel("I [micro A]")
+        plt.title('gK activation (n)')
+        plt.plot(state_monitor.t / ms, state_monitor.n[0] / b2.volt, "blue", lw=2)
+        plt.xlabel("t (ms)")
+        plt.ylabel("act. [a.u.]")
+        plt.ylim((0, 1))
         plt.grid()
 
-        if title is not None:
-            plt.suptitle(title)
+        # plt.plot(state_monitor.t / ms, state_monitor.I_e[0] / b2.uamp, lw=2)
+        # plt.axis((
+        #     0,
+        #     np.max(state_monitor.t / ms),
+        #     min(state_monitor.I_e[0] / b2.uamp) * 1.1,
+        #     max(state_monitor.I_e[0] / b2.uamp) * 1.1
+        # ))
+        #
+        # plt.xlabel("t [ms]")
+        # plt.ylabel("I [micro A]")
+        plt.grid()
+
+        plt.tight_layout(w_pad=0.5, h_pad=1.5)
 
         plt.show()
 
@@ -824,6 +767,22 @@ class FitzhughNagumo(object):
 
         return (v_fp, w_fp)
 
+
+class IzhikevichNeuron(NeuronSuperclass):
+    """
+    Izhikevich model.
+    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_, or the
+    original publication, <https://www.izhikevich.org/publications/spikes.htm>
+    """
+
+    def __init__(self):
+        super().__init__()
+
+
+class LifAscNeuron(NeuronSuperclass):
+
+    def __init__(self):
+        super().__init__()
 
 
 

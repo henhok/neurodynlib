@@ -100,7 +100,7 @@ class NeuronSuperclass(object):
         # Get a clean string with empty placeholders removed
         self.neuron_eqs = self.get_membrane_equation()
 
-        # Add an empty dict for default parameters
+        # Set default parameters
         self.neuron_parameters = self.default_neuron_parameters
 
         # Add default threshold condition, reset statements and integration method
@@ -108,8 +108,8 @@ class NeuronSuperclass(object):
         self.reset_statements = 'vm = V_reset'
         self.integration_method = 'euler'
 
-        # Add default initial values
-        self.initial_values = {'vm': None}  # vm: None => E_leak will be used
+        # Add other defaults
+        self.sinitial_values = {'vm': None}  # vm: None => E_leak will be used
         self.states_to_monitor = ['vm']
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
@@ -243,7 +243,11 @@ class NeuronSuperclass(object):
         state_monitor, spike_monitor = self.simulate_neuron(I_stim=step_current, simulation_time=300 * ms)
 
         # plot the membrane voltage
-        firing_threshold = self.neuron_parameters['V_threshold']
+        try:
+            firing_threshold = self.neuron_parameters['V_threshold']
+        except KeyError:
+            firing_threshold = None
+
         plot_tools.plot_voltage_and_current_traces(state_monitor, step_current,
                                                    title="Step current", firing_threshold=firing_threshold)
         print("nr of spikes: {}".format(len(spike_monitor.t)))
@@ -538,7 +542,7 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
     """
 
     default_neuron_parameters = {
-            'E_leak': -10.6 * mV,
+            'E_leak': 10.6 * mV,
             'g_leak': 0.3 * msiemens,
             'C': 1 * ufarad,
             'EK': -12 * mV,
@@ -546,7 +550,7 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
             'gK': 36 * msiemens,
             'gNa': 120 * msiemens,
             'refractory_period': 2.0 * ms,
-            'V_spike': 20 * mV
+            'V_spike': 60 * mV
     }
 
     neuron_model_defns = {
@@ -624,67 +628,8 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
 
         plt.show()
 
-    def simulate_HH_neuron(self, input_current, simulation_time):
-        """A Hodgkin-Huxley neuron implemented in Brian2.
-        Args:
-            input_current (TimedArray): Input current injected into the HH neuron
-            simulation_time (float): Simulation time [seconds]
-        Returns:
-            StateMonitor: Brian2 StateMonitor with recorded fields
-            ["vm", "I_e", "m", "n", "h"]
-        """
-
-        # neuron parameters
-        El = 10.6 * mV
-        EK = -12 * mV
-        ENa = 115 * mV
-        gl = 0.3 * msiemens
-        gK = 36 * msiemens
-        gNa = 120 * msiemens
-        C = 1 * b2.ufarad
-
-        # forming HH model with differential equations
-        eqs = """
-        I_e = input_current(t,i) : amp
-        membrane_Im = I_e + gNa*m**3*h*(ENa-vm) + \
-            gl*(El-vm) + gK*n**4*(EK-vm) : amp
-        alphah = .07*exp(-.05*vm/mV)/ms    : Hz
-        alpham = .1*(25*mV-vm)/(exp(2.5-.1*vm/mV)-1)/mV/ms : Hz
-        alphan = .01*(10*mV-vm)/(exp(1-.1*vm/mV)-1)/mV/ms : Hz
-        betah = 1./(1+exp(3.-.1*vm/mV))/ms : Hz
-        betam = 4*exp(-.0556*vm/mV)/ms : Hz
-        betan = .125*exp(-.0125*vm/mV)/ms : Hz
-        dh/dt = alphah*(1-h)-betah*h : 1
-        dm/dt = alpham*(1-m)-betam*m : 1
-        dn/dt = alphan*(1-n)-betan*n : 1
-        dvm/dt = membrane_Im/C : volt
-        """
-
-        neuron = b2.NeuronGroup(1, eqs, method="exponential_euler")
-
-        # parameter initialization
-        neuron.vm = 0
-        neuron.m = 0.05
-        neuron.h = 0.60
-        neuron.n = 0.32
-
-        # tracking parameters
-        st_mon = b2.StateMonitor(neuron, ["vm", "I_e", "m", "n", "h"], record=True)
-
-        # running the simulation
-        hh_net = b2.Network(neuron)
-        hh_net.add(st_mon)
-        hh_net.run(simulation_time)
-
-        return st_mon
-
-    def getting_started_hh(self):
-        """
-        An example to quickly get started with the Hodgkin-Huxley module.
-        """
-        current = input_factory.get_step_current(10, 45, ms, 7.2 * b2.uA)
-        state_monitor = self.simulate_HH_neuron(current, 70 * ms)
-        self.plot_data(state_monitor, title="HH Neuron, step current")
+    def getting_started(self, step_amplitude=7.2*uA, sine_amplitude=3.6*uA, sine_freq=150*Hz, sine_dc=2.9*nA):
+        super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
 
 
 class FitzhughNagumo(object):

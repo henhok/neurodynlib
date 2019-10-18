@@ -39,12 +39,12 @@ class NeuronSuperclass(object):
 
     # General equation for neuron models
     membrane_eq_template = '''
-    dvm/dt = (($I_NEURON_MODEL $SYN_CURRENTS $EXT_CURRENTS)/C) $VM_NOISE : volt $BRIAN2_FLAGS
+    dvm/dt = (($I_NEURON_MODEL $SYN_CURRENTS $EXT_CURRENTS)/C) $VM_NOISE : $VM_UNIT $BRIAN2_FLAGS
     $NEURON_MODEL_EQS
     $SYN_CURRENTS_EQS
     $EXT_CURRENTS_EQS
     '''
-    all_template_placeholders = ['I_NEURON_MODEL', 'SYN_CURRENTS', 'EXT_CURRENTS', 'VM_NOISE',
+    all_template_placeholders = ['I_NEURON_MODEL', 'SYN_CURRENTS', 'EXT_CURRENTS', 'VM_NOISE', 'VM_UNIT'
                                  'BRIAN2_FLAGS', 'NEURON_MODEL_EQS', 'SYN_CURRENTS_EQS',
                                  'EXT_CURRENTS_EQS']
 
@@ -55,6 +55,7 @@ class NeuronSuperclass(object):
         # 'EXT_CURRENTS': '+ I_stim(t,i)',  # + tonic_current*(1-exp(-t/(50*msecond)))
         # 'EXT_CURRENTS_EQS': 'I_ext : amp',
         # 'VM_NOISE': '',  # + noise_sigma*xi*taum_soma**-0.5
+        'VM_UNIT': 'volt',
         'BRIAN2_FLAGS': '(unless refractory)'
     }
 
@@ -62,6 +63,7 @@ class NeuronSuperclass(object):
         # 'EXT_CURRENTS': '',
         # 'EXT_CURRENTS_EQS': '',
         # 'VM_NOISE': '',
+        'VM_UNIT': 'volt',
         'BRIAN2_FLAGS': ''  # Be careful! "Unless refractory" in dendrites will not cause an error, but behavior is WRONG
     }
 
@@ -109,7 +111,7 @@ class NeuronSuperclass(object):
         self.integration_method = 'euler'
 
         # Add other defaults
-        self.sinitial_values = {'vm': None}  # vm: None => E_leak will be used
+        self.initial_values = {'vm': None}  # vm: None => E_leak will be used
         self.states_to_monitor = ['vm']
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
@@ -187,6 +189,14 @@ class NeuronSuperclass(object):
         return self.neuron_parameters
 
     def set_neuron_parameters(self, **kwargs):
+        """
+        Set neuron parameters.
+        If you don't know the correct units, use first get_neuron_parameters() to get the default parameters with
+        correct units.
+
+        :param kwargs:
+        :return:
+        """
         self.neuron_parameters.update(kwargs)
 
     def get_reset_statements(self):
@@ -316,13 +326,17 @@ class NeuronSuperclass(object):
         else:
             return counts
 
-    def plot_states(self, state_monitor):
+    def plot_vm(self, state_monitor):
 
         plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=1)
         plt.title('Membrane voltage')
         plt.xlabel("time [ms]")
         plt.ylabel("vm [mV]")
         plt.show()
+
+    def plot_states(self, state_monitor):
+
+        self.plot_vm(state_monitor)
 
 
 class LifNeuron(NeuronSuperclass):
@@ -433,12 +447,12 @@ class EifNeuron(NeuronSuperclass):
     default_neuron_parameters = {
             'E_leak': -65.0 * mV,
             'V_reset': -60.0 * mV,
-            'V_threshold': -55.0 * mV,
+            'V_threshold': -55.0 * mV,  # soft threshold
             'g_leak': 50 * nS,
             'C': 600 * pF,
-            'DeltaT': 2 * mV,
+            'DeltaT': 2 * mV,  # spike sharpness
             'refractory_period': 2.0 * ms,
-            'V_cut': -30.0 * mV
+            'V_cut': -30.0 * mV  # technical threshold to tell the algorithm when to reset vm to v_reset
     }
 
     neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak-vm) + g_leak * DeltaT * exp((vm-V_threshold) / DeltaT)'}
@@ -731,12 +745,59 @@ class FitzhughNagumo(object):
 class IzhikevichNeuron(NeuronSuperclass):
     """
     Izhikevich model.
-    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_, or the
-    original publication, <https://www.izhikevich.org/publications/spikes.htm>
+    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
+    Here, we use the formulation and parameters presented in Izhikevich & Edelman 2008 PNAS
     """
+
+    # Default parameters give a chattering (CH) neuron
+    default_neuron_parameters = {
+            'E_leak': -60.0*mV,            # equivalent to v_r in PNAS 2008
+            'V_reset': -40.0*mV,           # c
+            'V_threshold': -40.0*mV,       # v_t
+            'C': 50*pF,
+            'k': 1.5*nS/mV,
+            'a': 0.03/ms,  # inverse of recovery time constant
+            'b': 5*nS,
+            'd': 150* pA,
+            'refractory_period': 2.0 * ms,
+            'V_cut': 35.0*mV               # v_peak
+    }
+
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'k * (vm-E_leak) * (vm-V_threshold) - u',
+                          'NEURON_MODEL_EQS': 'du/dt = a*(b*(vm-E_leak) - u) : amp'}
 
     def __init__(self):
         super().__init__()
+        self.threshold_condition = 'vm > V_cut'
+        self.reset_statements = 'vm = V_reset; u += d'
+        self.initial_values = {'vm': None, 'u': 0}
+        self.states_to_monitor = ['vm', 'u']
+
+    def plot_states(self, state_monitor):
+        """
+        Visualizes the state variables: u-t, v-t and phase-plane u-v
+        Args:
+            state_monitor (StateMonitor): States of "v" and "u"
+        """
+        plt.subplot(2, 2, 1)
+        plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=2)
+        plt.xlabel("t [ms]")
+        plt.ylabel("u [mV]")
+        plt.title("Membrane potential")
+        plt.subplot(2, 2, 2)
+        plt.plot(state_monitor.vm[0] / mV, state_monitor.u[0] / pA, lw=2)
+        plt.xlabel("u [mV]")
+        plt.ylabel("w [pA]")
+        plt.title("Phase plane representation")
+        plt.subplot(2, 2, 3)
+        plt.plot(state_monitor.t / ms, state_monitor.u[0] / pA, lw=2)
+        plt.xlabel("t [ms]")
+        plt.ylabel("w [pA]")
+        plt.title("Adaptation current")
+
+        plt.tight_layout(w_pad=0.5, h_pad=1.5)
+        plt.show()
 
 
 class LifAscNeuron(NeuronSuperclass):

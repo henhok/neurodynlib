@@ -19,6 +19,7 @@ import neurodynlib.tools.input_factory as input_factory
 from neurodynlib.tools import plot_tools, spike_tools, input_factory
 from string import Template
 from datetime import datetime
+import json
 
 import sys
 # sys.path.append('/home/henhok/PycharmProjects/brian2modelfitting/')
@@ -116,6 +117,11 @@ class NeuronSuperclass(object):
         self.states_to_monitor = ['vm']
         self.neuron_name = self.__class__.__name__ + '_' + datetime.now().strftime('%Y%m%d%H%M%S%f')
 
+        self.parameter_units = {
+            'E_leak': mV, 'V_reset': mV, 'V_threshold': mV,
+            'g_leak': nS, 'C': pF, 'refractory_period': ms
+        }
+
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
 
         # Do ad hoc substitutions that don't affect the object's template
@@ -148,41 +154,13 @@ class NeuronSuperclass(object):
     def get_eqs_template(self):
         return self.neuron_eqs_template
 
-    def get_dict(self, base_dict=None, specific_compartment='XX'):
-
-        compartment_dict = dict(base_dict)
-        substitutables = {k: k + '_' + specific_compartment for k in self.comp_specific_vars}
-        compartment_dict.update(substitutables)
-
-        return compartment_dict
-
-    def add_tonic_current(self):
-        raise NotImplementedError
-
-    def add_vm_noise(self, noise_sigma):
-        raise NotImplementedError
-
-    def add_receptors(self, receptor_name, receptor_equations):
-        # assert exc_model in NeuronSuperclass.ExcModelNames, \
-        #     "Undefined excitation model!"
-        # assert inh_model in NeuronSuperclass.InhModelNames, \
-        #     "Undefined inhibition model!"
-
-        # Add synaptic E/I model specific keys&strings to default strings
-        # Pyramidal cells are assumed to have alpha synapses (non-zero rise time)
-        # self.synaptic_excinh_model_strings = dict(NeuronSuperclass.default_synaptic_excinh_strings)
-        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[exc_model])
-        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[inh_model])
-
-        # Aggregate all compartment-specific variables to a common list
-        # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
-        #                           NeuronSuperclass.CompSpecificVariables[inh_model]
-
-        raise NotImplementedError
-
-    def get_model_definitions(self):
-        # eqs, params = a.get_model_definitions()
-        raise NotImplementedError
+    # def get_dict(self, base_dict=None, specific_compartment='XX'):
+    #
+    #     compartment_dict = dict(base_dict)
+    #     substitutables = {k: k + '_' + specific_compartment for k in self.comp_specific_vars}
+    #     compartment_dict.update(substitutables)
+    #
+    #     return compartment_dict
 
     def get_parameter_names(self):
         return self.default_neuron_parameters.keys()
@@ -330,6 +308,7 @@ class NeuronSuperclass(object):
 
     def plot_vm(self, state_monitor):
 
+        plt.figure(figsize=(12, 4))
         plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=1)
         plt.title('Membrane voltage')
         plt.xlabel("time [ms]")
@@ -339,6 +318,66 @@ class NeuronSuperclass(object):
     def plot_states(self, state_monitor):
 
         self.plot_vm(state_monitor)
+
+    def get_json(self, include_neuron_name=True):
+        neuron_parameters_wo_units = dict()
+        neuron_parameters_wo_units[self.neuron_name] = dict()
+        for key, value in self.neuron_parameters.items():
+            neuron_parameters_wo_units[self.neuron_name][key] = value / self.parameter_units[key]
+
+        if include_neuron_name is True:
+            return json.dumps(neuron_parameters_wo_units)
+        else:
+            return json.dumps(neuron_parameters_wo_units[self.neuron_name])
+
+    def save_json(self, filename=None):
+
+        if filename is None:
+            filename = self.neuron_name + '.json'
+
+        with open(filename, 'w') as fi:
+            fi.write(self.get_json())
+            fi.close()
+
+    def read_json(self, filename, neuron_name=None):
+
+        with open(filename, 'r') as fi:
+            params_dict = json.load(fi)
+
+        # If no neuron_name is provided, we take the first (and hopefully only) one
+        if neuron_name is None:
+            neuron_name = list(params_dict.keys())[0]
+
+        imported_params = dict()
+        for key, value in params_dict[neuron_name].items():
+            imported_params[key] = b2.Quantity(value, self.parameter_units[key])
+
+        self.neuron_parameters = imported_params
+
+
+    def add_tonic_current(self):
+        raise NotImplementedError
+
+    def add_vm_noise(self, noise_sigma):
+        raise NotImplementedError
+
+    def add_receptors(self, receptor_name, receptor_equations):
+        # assert exc_model in NeuronSuperclass.ExcModelNames, \
+        #     "Undefined excitation model!"
+        # assert inh_model in NeuronSuperclass.InhModelNames, \
+        #     "Undefined inhibition model!"
+
+        # Add synaptic E/I model specific keys&strings to default strings
+        # Pyramidal cells are assumed to have alpha synapses (non-zero rise time)
+        # self.synaptic_excinh_model_strings = dict(NeuronSuperclass.default_synaptic_excinh_strings)
+        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[exc_model])
+        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[inh_model])
+
+        # Aggregate all compartment-specific variables to a common list
+        # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
+        #                           NeuronSuperclass.CompSpecificVariables[inh_model]
+
+        raise NotImplementedError
 
 
 class LifNeuron(NeuronSuperclass):
@@ -462,6 +501,8 @@ class EifNeuron(NeuronSuperclass):
     def __init__(self):
         super().__init__()
         self.threshold_condition = 'vm > V_cut'
+        new_parameter_units = {'DeltaT': mV, 'V_cut': mV}
+        self.parameter_units.update(new_parameter_units)
 
     def getting_started(self, step_amplitude=0.8*nA, sine_amplitude=1.6*nA, sine_freq=150*Hz, sine_dc=1.3*nA):
         super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
@@ -519,6 +560,8 @@ class AdexNeuron(NeuronSuperclass):
         self.reset_statements = 'vm = V_reset; w += b'
         self.initial_values = {'vm': None, 'w': 0*pA}
         self.states_to_monitor = ['vm', 'w']
+        new_parameter_units = {'DeltaT': mV, 'V_cut': mV, 'a': nS, 'b': pA, 'tau_w': ms}
+        self.parameter_units.update(new_parameter_units)
 
     # This function implement Adaptive Exponential Leaky Integrate-And-Fire neuron model
 
@@ -593,6 +636,8 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
         self.integration_method = 'exponential_euler'
         self.initial_values = {'m': 0.05, 'h': 0.60, 'n': 0.32, 'vm': 0*mV}
         self.states_to_monitor = ['vm', 'm', 'n', 'h']
+        new_parameter_units = {'EK': mV, 'ENa': mV, 'gK': nS, 'gNa': nS, 'V_spike': mV}
+        self.parameter_units.update(new_parameter_units)
 
     def plot_states(self, state_monitor):
         """Plots the state_monitor variables ["vm", "I_e", "m", "n", "h"] vs. time.
@@ -646,6 +691,138 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
 
     def getting_started(self, step_amplitude=7.2*uA, sine_amplitude=3.6*uA, sine_freq=150*Hz, sine_dc=2.9*nA):
         super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
+
+
+class IzhikevichNeuron(NeuronSuperclass):
+    """
+    Izhikevich model.
+    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
+    Here, we use the formulation and parameters presented in Izhikevich & Edelman 2008 PNAS
+    """
+
+    # Default parameters give a chattering (CH) neuron
+    default_neuron_parameters = {
+            'E_leak': -60.0*mV,            # equivalent to v_r in PNAS 2008
+            'V_reset': -40.0*mV,           # c
+            'V_threshold': -40.0*mV,       # v_t
+            'C': 50*pF,
+            'k': 1.5*nS/mV,
+            'a': 0.03/ms,  # inverse of recovery time constant
+            'b': 5*nS,
+            'd': 150* pA,
+            'refractory_period': 2.0 * ms,
+            'V_cut': 35.0*mV               # v_peak
+    }
+
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'k * (vm-E_leak) * (vm-V_threshold) - u',
+                          'NEURON_MODEL_EQS': 'du/dt = a*(b*(vm-E_leak) - u) : amp'}
+
+    def __init__(self):
+        super().__init__()
+        self.threshold_condition = 'vm > V_cut'
+        self.reset_statements = 'vm = V_reset; u += d'
+        self.initial_values = {'vm': None, 'u': 0}
+        self.states_to_monitor = ['vm', 'u']
+        new_parameter_units = {'V_cut': mV, 'k': nS/mV, 'a': (1/ms), 'b': nS, 'd': pA, 'tau_w': ms}
+        self.parameter_units.update(new_parameter_units)
+
+    def plot_states(self, state_monitor):
+        """
+        Visualizes the state variables: u-t, v-t and phase-plane u-v
+        Args:
+            state_monitor (StateMonitor): States of "v" and "u"
+        """
+        plt.subplot(2, 2, 1)
+        plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=2)
+        plt.xlabel("t [ms]")
+        plt.ylabel("u [mV]")
+        plt.title("Membrane potential")
+        plt.subplot(2, 2, 2)
+        plt.plot(state_monitor.vm[0] / mV, state_monitor.u[0] / pA, lw=2)
+        plt.xlabel("u [mV]")
+        plt.ylabel("w [pA]")
+        plt.title("Phase plane representation")
+        plt.subplot(2, 2, 3)
+        plt.plot(state_monitor.t / ms, state_monitor.u[0] / pA, lw=2)
+        plt.xlabel("t [ms]")
+        plt.ylabel("w [pA]")
+        plt.title("Adaptation current")
+
+        plt.tight_layout(w_pad=0.5, h_pad=1.5)
+        plt.show()
+
+
+class LifAscNeuron(NeuronSuperclass):
+    """
+    Leaky Integrate-and-Fire with After-spike Currents (LIF-ASC).
+    One of the generalized LIF (GLIF) models used in the Allen Brain Institute. LIF-ASC is GLIF_3.
+    For more information, see http://celltypes.brain-map.org/ ,
+    http://help.brain-map.org/display/celltypes/Documentation?_ga=2.31556414.1221863260.1571652272-1994599725.1571652272 ,
+    or Teeter et al. 2018 Nature Comm. https://www.nature.com/articles/s41467-017-02717-4
+    """
+
+    # The default parameters correspond to neuronal_model_id = 637925685 available at
+    # https://celltypes.brain-map.org/experiment/electrophysiology/623893177
+    default_neuron_parameters = {
+        'E_leak': -77.01623281 * mvolt,
+        'C': 233.02310736 * pfarad,
+        'g_leak': 8.10525954 * nsiemens,
+        'A_asc1': -56.75679504 * pamp,
+        'tau_asc1': 100. * msecond,
+        'A_asc2': -0.60597377 * namp,
+        'tau_asc2': 10. * msecond,
+        'V_reset': -77. * mvolt,
+        'V_threshold': -49.31118264 * mvolt,
+        'refractory_period': 2. * msecond
+    }
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak - vm) + I_asc1 + I_asc2',
+                          'NEURON_MODEL_EQS': '''
+                          dI_asc1/dt = -I_asc1/tau_asc1 : amp
+                          dI_asc2/dt = -I_asc2/tau_asc2 : amp
+                          '''}
+
+    def __init__(self):
+        super().__init__()
+        self.threshold_condition = 'vm > V_threshold'
+        self.reset_statements = 'vm = V_reset; I_asc1 += A_asc1; I_asc2 += A_asc2'
+        self.initial_values = {'vm': None, 'I_asc1': 0.0, 'I_asc2': 0.0}
+        self.states_to_monitor = ['vm', 'I_asc1', 'I_asc2']
+        new_parameter_units = {'A_asc1': pA, 'A_asc2': pA, 'tau_asc1': ms, 'tau_asc2': ms}
+        self.parameter_units.update(new_parameter_units)
+
+
+    def read_abi_neuron_config(self, neuron_config):
+        """
+        Method for importing parameters from the Allen Brain Institute's cell type atlas.
+        Parameters can be obtained by downloading the json from the website. You can also use the AllenSDK:
+        from allensdk.api.queries.glif_api import GlifApi
+        neuron_config = GlifApi().get_neuron_configs([neuronal_model_id])[neuronal_model_id]
+
+        :param neuron_config:
+        :return:
+        """
+
+        if len(neuron_config['asc_amp_array']) > 2:
+            print('Warning! Model has more than 2 afterspike currents. Will take only the first two.')
+
+        abi_parameters = {
+            'E_leak': neuron_config['El_reference'] * volt,
+            'C': neuron_config['C'] * farad,
+            'g_leak': (1 / neuron_config['R_input']) * siemens,
+            'V_threshold': (neuron_config['El_reference'] + neuron_config['th_inf']) * volt,
+            'A_asc1': neuron_config['asc_amp_array'][0] * amp,
+            'A_asc2': neuron_config['asc_amp_array'][1] * amp,
+            'tau_asc1': neuron_config['asc_tau_array'][0] * second,
+            'tau_asc2': neuron_config['asc_tau_array'][1] * second
+        }
+
+        self.initial_values['I_asc1'] = neuron_config['init_AScurrents'][0] * amp
+        self.initial_values['I_asc2'] = neuron_config['init_AScurrents'][1] * amp
+
+        self.set_neuron_parameters(**abi_parameters)
+
 
 
 class FitzhughNagumo(object):
@@ -742,133 +919,6 @@ class FitzhughNagumo(object):
         w_fp = 2. * v_fp + a
 
         return (v_fp, w_fp)
-
-
-class IzhikevichNeuron(NeuronSuperclass):
-    """
-    Izhikevich model.
-    See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
-    Here, we use the formulation and parameters presented in Izhikevich & Edelman 2008 PNAS
-    """
-
-    # Default parameters give a chattering (CH) neuron
-    default_neuron_parameters = {
-            'E_leak': -60.0*mV,            # equivalent to v_r in PNAS 2008
-            'V_reset': -40.0*mV,           # c
-            'V_threshold': -40.0*mV,       # v_t
-            'C': 50*pF,
-            'k': 1.5*nS/mV,
-            'a': 0.03/ms,  # inverse of recovery time constant
-            'b': 5*nS,
-            'd': 150* pA,
-            'refractory_period': 2.0 * ms,
-            'V_cut': 35.0*mV               # v_peak
-    }
-
-
-    neuron_model_defns = {'I_NEURON_MODEL': 'k * (vm-E_leak) * (vm-V_threshold) - u',
-                          'NEURON_MODEL_EQS': 'du/dt = a*(b*(vm-E_leak) - u) : amp'}
-
-    def __init__(self):
-        super().__init__()
-        self.threshold_condition = 'vm > V_cut'
-        self.reset_statements = 'vm = V_reset; u += d'
-        self.initial_values = {'vm': None, 'u': 0}
-        self.states_to_monitor = ['vm', 'u']
-
-    def plot_states(self, state_monitor):
-        """
-        Visualizes the state variables: u-t, v-t and phase-plane u-v
-        Args:
-            state_monitor (StateMonitor): States of "v" and "u"
-        """
-        plt.subplot(2, 2, 1)
-        plt.plot(state_monitor.t / ms, state_monitor.vm[0] / mV, lw=2)
-        plt.xlabel("t [ms]")
-        plt.ylabel("u [mV]")
-        plt.title("Membrane potential")
-        plt.subplot(2, 2, 2)
-        plt.plot(state_monitor.vm[0] / mV, state_monitor.u[0] / pA, lw=2)
-        plt.xlabel("u [mV]")
-        plt.ylabel("w [pA]")
-        plt.title("Phase plane representation")
-        plt.subplot(2, 2, 3)
-        plt.plot(state_monitor.t / ms, state_monitor.u[0] / pA, lw=2)
-        plt.xlabel("t [ms]")
-        plt.ylabel("w [pA]")
-        plt.title("Adaptation current")
-
-        plt.tight_layout(w_pad=0.5, h_pad=1.5)
-        plt.show()
-
-
-class LifAscNeuron(NeuronSuperclass):
-    """
-    Leaky Integrate-and-Fire with After-spike Currents (LIF-ASC).
-    One of the generalized LIF (GLIF) models used in the Allen Brain Institute. LIF-ASC is GLIF_3.
-    For more information, see http://celltypes.brain-map.org/ ,
-    http://help.brain-map.org/display/celltypes/Documentation?_ga=2.31556414.1221863260.1571652272-1994599725.1571652272 ,
-    or Teeter et al. 2018 Nature Comm. https://www.nature.com/articles/s41467-017-02717-4
-    """
-
-    # The default parameters correspond to neuronal_model_id = 637925685 available at
-    # https://celltypes.brain-map.org/experiment/electrophysiology/623893177
-    default_neuron_parameters = {
-        'E_leak': -77.01623281 * mvolt,
-        'C': 233.02310736 * pfarad,
-        'g_leak': 8.10525954 * nsiemens,
-        'A_asc1': -56.75679504 * pamp,
-        'tau_asc1': 100. * msecond,
-        'A_asc2': -0.60597377 * namp,
-        'tau_asc2': 10. * msecond,
-        'V_reset': -77. * mvolt,
-        'V_threshold': -49.31118264 * mvolt,
-        'refractory_period': 2. * msecond
-    }
-
-    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak - vm) + I_asc1 + I_asc2',
-                          'NEURON_MODEL_EQS': '''
-                          dI_asc1/dt = -I_asc1/tau_asc1 : amp
-                          dI_asc2/dt = -I_asc2/tau_asc2 : amp
-                          '''}
-
-    def __init__(self):
-        super().__init__()
-        self.threshold_condition = 'vm > V_threshold'
-        self.reset_statements = 'vm = V_reset; I_asc1 += A_asc1; I_asc2 += A_asc2'
-        self.initial_values = {'vm': None, 'I_asc1': 0.0, 'I_asc2': 0.0}
-        self.states_to_monitor = ['vm', 'I_asc1', 'I_asc2']
-
-    def read_abi_neuron_config(self, neuron_config):
-        """
-        Method for importing parameters from the Allen Brain Institute's cell type atlas.
-        Parameters can be obtained by downloading the json from the website. You can also use the AllenSDK:
-        from allensdk.api.queries.glif_api import GlifApi
-        neuron_config = GlifApi().get_neuron_configs([neuronal_model_id])[neuronal_model_id]
-
-        :param neuron_config:
-        :return:
-        """
-
-        if len(neuron_config['asc_amp_array']) > 2:
-            print('Warning! Model has more than 2 afterspike currents. Will take only the first two.')
-
-        abi_parameters = {
-            'E_leak': neuron_config['El_reference'] * volt,
-            'C': neuron_config['C'] * farad,
-            'g_leak': (1 / neuron_config['R_input']) * siemens,
-            'V_threshold': (neuron_config['El_reference'] + neuron_config['th_inf']) * volt,
-            'A_asc1': neuron_config['asc_amp_array'][0] * amp,
-            'A_asc2': neuron_config['asc_amp_array'][1] * amp,
-            'tau_asc1': neuron_config['asc_tau_array'][0] * second,
-            'tau_asc2': neuron_config['asc_tau_array'][1] * second
-        }
-
-        self.initial_values['I_asc1'] = neuron_config['init_AScurrents'][0] * amp
-        self.initial_values['I_asc2'] = neuron_config['init_AScurrents'][1] * amp
-
-        self.set_neuron_parameters(**abi_parameters)
-
 
 
 class passive_cable(object):

@@ -18,6 +18,7 @@ from brian2.units import *
 import neurodynlib.tools.input_factory as input_factory
 from neurodynlib.tools import plot_tools, spike_tools, input_factory
 from string import Template
+from datetime import datetime
 
 import sys
 # sys.path.append('/home/henhok/PycharmProjects/brian2modelfitting/')
@@ -113,6 +114,7 @@ class NeuronSuperclass(object):
         # Add other defaults
         self.initial_values = {'vm': None}  # vm: None => E_leak will be used
         self.states_to_monitor = ['vm']
+        self.neuron_name = self.__class__.__name__ + '_' + datetime.now().strftime('%Y%m%d%H%M%S%f')
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
 
@@ -801,9 +803,71 @@ class IzhikevichNeuron(NeuronSuperclass):
 
 
 class LifAscNeuron(NeuronSuperclass):
+    """
+    Leaky Integrate-and-Fire with After-spike Currents (LIF-ASC).
+    One of the generalized LIF (GLIF) models used in the Allen Brain Institute. LIF-ASC is GLIF_3.
+    For more information, see http://celltypes.brain-map.org/ ,
+    http://help.brain-map.org/display/celltypes/Documentation?_ga=2.31556414.1221863260.1571652272-1994599725.1571652272 ,
+    or Teeter et al. 2018 Nature Comm. https://www.nature.com/articles/s41467-017-02717-4
+    """
+
+    # The default parameters correspond to neuronal_model_id = 637925685 available at
+    # https://celltypes.brain-map.org/experiment/electrophysiology/623893177
+    default_neuron_parameters = {
+        'E_leak': -77.01623281 * mvolt,
+        'C': 233.02310736 * pfarad,
+        'g_leak': 8.10525954 * nsiemens,
+        'A_asc1': -56.75679504 * pamp,
+        'tau_asc1': 100. * msecond,
+        'A_asc2': -0.60597377 * namp,
+        'tau_asc2': 10. * msecond,
+        'V_reset': -77. * mvolt,
+        'V_threshold': -49.31118264 * mvolt,
+        'refractory_period': 2. * msecond
+    }
+
+    neuron_model_defns = {'I_NEURON_MODEL': 'g_leak*(E_leak - vm) + I_asc1 + I_asc2',
+                          'NEURON_MODEL_EQS': '''
+                          dI_asc1/dt = -I_asc1/tau_asc1 : amp
+                          dI_asc2/dt = -I_asc2/tau_asc2 : amp
+                          '''}
 
     def __init__(self):
         super().__init__()
+        self.threshold_condition = 'vm > V_threshold'
+        self.reset_statements = 'vm = V_reset; I_asc1 += A_asc1; I_asc2 += A_asc2'
+        self.initial_values = {'vm': None, 'I_asc1': 0.0, 'I_asc2': 0.0}
+        self.states_to_monitor = ['vm', 'I_asc1', 'I_asc2']
+
+    def read_abi_neuron_config(self, neuron_config):
+        """
+        Method for importing parameters from the Allen Brain Institute's cell type atlas.
+        Parameters can be obtained by downloading the json from the website. You can also use the AllenSDK:
+        from allensdk.api.queries.glif_api import GlifApi
+        neuron_config = GlifApi().get_neuron_configs([neuronal_model_id])[neuronal_model_id]
+
+        :param neuron_config:
+        :return:
+        """
+
+        if len(neuron_config['asc_amp_array']) > 2:
+            print('Warning! Model has more than 2 afterspike currents. Will take only the first two.')
+
+        abi_parameters = {
+            'E_leak': neuron_config['El_reference'] * volt,
+            'C': neuron_config['C'] * farad,
+            'g_leak': (1 / neuron_config['R_input']) * siemens,
+            'V_threshold': (neuron_config['El_reference'] + neuron_config['th_inf']) * volt,
+            'A_asc1': neuron_config['asc_amp_array'][0] * amp,
+            'A_asc2': neuron_config['asc_amp_array'][1] * amp,
+            'tau_asc1': neuron_config['asc_tau_array'][0] * second,
+            'tau_asc2': neuron_config['asc_tau_array'][1] * second
+        }
+
+        self.initial_values['I_asc1'] = neuron_config['init_AScurrents'][0] * amp
+        self.initial_values['I_asc2'] = neuron_config['init_AScurrents'][1] * amp
+
+        self.set_neuron_parameters(**abi_parameters)
 
 
 
@@ -900,167 +964,6 @@ class passive_cable(object):
         plt.show()
 
 
-# TODO? Part of neuron_type/neurons.py missing
-class NeuronAbstract(object):
-    """
-    This file implements a type I and a type II model from
-    the abstract base class NeuronAbstract.
-    You can inject step currents and plot the responses,
-    as well as get firing rates.
-    Relevant book chapters:
-    - http://neuronaldynamics.epfl.ch/online/Ch4.S4.html
-
-    Abstract base class for both neuron types.
-    This stores its own recorder and network, allowing
-    each neuron to be run several times with changing
-    currents while keeping the same neurogroup object
-    and network internally.
-    """
-
-    def __init__(self):
-        self._make_neuron()
-        self.rec = b2.StateMonitor(self.neuron, ["v", "w", "I"], record=True)
-        self.net = b2.Network([self.neuron, self.rec])
-        self.net.store()
-
-    def _make_neuron(self):
-        """Abstract function, which creates neuron attribute for this class."""
-
-        raise NotImplementedError
-
-    def get_neuron_type(self):
-        """
-        Type I or II.
-        Returns:
-            type as a string "Type I" or "Type II"
-        """
-        return self._get_neuron_type()
-
-    def _get_neuron_type(self):
-        """Just a trick to have the underlying function NOT being documented by sphinx
-        (because this function's name starts with _)"""
-        raise NotImplementedError
-
-    def run(self, input_current, simtime):
-        """Runs the neuron for a given current.
-        Args:
-            input_current (TimedArray): Input current injected into the neuron
-            simtime (Quantity): Simulation time in correct Brian units.
-        Returns:
-            StateMonitor: Brian2 StateMonitor with input current (I) and
-            voltage (V) recorded
-        """
-
-        self.net.restore()
-        self.neuron.namespace["input_current"] = input_current
-
-        # run the simulation
-        self.net.run(simtime)
-
-        return self.rec
-
-    def plot_data(self, state_monitor, title=None, show=True):
-        """Plots a TimedArray for values I, v and w
-        Args:
-            state_monitor (StateMonitor): the data to plot. expects ["v", "w", "I"] and (by default) "t"
-            title (string, optional): plot title to display
-            show (bool, optional): call plt.show for the plot
-        Returns:
-            StateMonitor: Brian2 StateMonitor with input current (I) and
-                voltage (V) recorded
-        """
-
-        t = state_monitor.t / ms
-        v = state_monitor.v[0] / mV
-        w = state_monitor.w[0] / mV
-        I = state_monitor.I[0] / pA
-
-        # plot voltage time series
-        plt.figure()
-        plt.subplot(311)
-        plt.plot(t, v, lw=2)
-        plt.xlabel("t [ms]")
-        plt.ylabel("v [mV]")
-        plt.grid()
-
-        # plot activation and inactivation variables
-        plt.subplot(312)
-        plt.plot(t, w, "k", lw=2)
-        plt.xlabel("t [ms]")
-        plt.ylabel("w [mV]")
-        plt.grid()
-
-        # plot current
-        plt.subplot(313)
-        plt.plot(t, I, lw=2)
-        plt.axis((0, t.max(), 0, I.max() * 1.1))
-        plt.xlabel("t [ms]")
-        plt.ylabel("I [pA]")
-        plt.grid()
-
-        if title is not None:
-            plt.suptitle(title)
-
-        if show:
-            plt.show()
-
-
-class _NeuronTypeOne(NeuronAbstract):
-
-    def _get_neuron_type(self):
-        return "Type I"
-
-    def _make_neuron(self):
-        """Sets the self.neuron attribute."""
-
-        # neuron parameters
-        pars = {
-            "g_1": 4.4 * (1 / mV),
-            "g_2": 8 * (1 / mV),
-            "g_L": 2,
-            "V_1": 120 * mV,
-            "V_2": -84 * mV,
-            "V_L": -60 * mV,
-            "phi": 0.06666667,
-            "R": 100 * Gohm,
-        }
-
-        # forming the neuron model using differential equations
-        eqs = """
-        I = input_current(t,i) : amp
-        winf = (0.5*mV)*( 1 + tanh((v-12*mV)/(17*mV)) ) : volt
-        tau = (1*ms)/cosh((v-12*mV)/(2*17*mV)) : second
-        m = (0.5*mV)*(1+tanh((v+1.2*mV)/(18*mV))) : volt
-        dv/dt = (-g_1*m*(v-V_1) - g_2*w*(v-V_2) - g_L*(v-V_L) \
-            + I*R)/(20*ms) : volt
-        dw/dt = phi*(winf-w)/tau : volt
-        """
-
-        self.neuron = b2.NeuronGroup(1, eqs, method="euler")
-        self.neuron.v = pars["V_L"]
-        self.neuron.namespace.update(pars)
-
-
-class _NeuronTypeTwo(NeuronAbstract):
-
-    def _get_neuron_type(self):
-        return "Type II"
-
-    def _make_neuron(self):
-        """Sets the self.neuron attribute."""
-
-        # forming the neuron model using differential equations
-        eqs = """
-        I = input_current(t,i) : amp
-        dv/dt = (v - (v**3)/(3*mvolt*mvolt) - w + I*Gohm)/ms : volt
-        dw/dt = (a*(v+0.7*mvolt)-w)/tau : volt
-        """
-
-        self.neuron = b2.NeuronGroup(1, eqs, method="euler")
-        self.neuron.v = 0
-
-        self.neuron.namespace["a"] = 1.25
-        self.neuron.namespace["tau"] = 15.6 * ms
 
 
 if __name__ == '__main__':

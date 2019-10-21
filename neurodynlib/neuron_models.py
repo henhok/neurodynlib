@@ -15,11 +15,11 @@ import matplotlib.pyplot as plt
 import random
 import brian2 as b2
 from brian2.units import *
-import neurodynlib.tools.input_factory as input_factory
 from neurodynlib.tools import plot_tools, spike_tools, input_factory
 from string import Template
 from datetime import datetime
 import json
+from neurodynlib.receptor_models import ReceptorEqs
 
 import sys
 # sys.path.append('/home/henhok/PycharmProjects/brian2modelfitting/')
@@ -28,26 +28,25 @@ import sys
 b2.defaultclock.dt = 0.1 * ms
 
 
-class NeuronSuperclass(object):
+class PointNeuron(object):
     """
     Helper class for switching swiftly between neuron/synaptic current/synapse models in CxSystem.
     This is a preliminary version.
 
-    Builds equation systems of the form:
-    dvm/dt = ((I_NEURON_MODEL + I_SYNAPTIC + I_OTHER)/C) + I_VM_NOISE
-    NEURON_MODEL_DYNAMICS
-    SYNAPTIC_CURRENT_DYNAMICS
     """
 
     # General equation for neuron models
     membrane_eq_template = '''
-    dvm/dt = (($I_NEURON_MODEL $SYN_CURRENTS $EXT_CURRENTS)/C) $VM_NOISE : $VM_UNIT $BRIAN2_FLAGS
+    dvm/dt = (($I_NEURON_MODEL $I_SYNAPTIC_EXC $I_SYNAPTIC_INH $EXT_CURRENTS)/C) $VM_NOISE : $VM_UNIT $BRIAN2_FLAGS
     $NEURON_MODEL_EQS
-    $SYN_CURRENTS_EQS
+    $SYNAPTIC_EXC_EQS
+    $SYNAPTIC_INH_EQS
     $EXT_CURRENTS_EQS
     '''
-    all_template_placeholders = ['I_NEURON_MODEL', 'SYN_CURRENTS', 'EXT_CURRENTS', 'VM_NOISE', 'VM_UNIT'
-                                 'BRIAN2_FLAGS', 'NEURON_MODEL_EQS', 'SYN_CURRENTS_EQS',
+    all_template_placeholders = ['I_NEURON_MODEL', 'I_SYNAPTIC_EXC', 'I_SYNAPTIC_INH', 'EXT_CURRENTS',
+                                 'VM_NOISE', 'VM_UNIT', 'BRIAN2_FLAGS',
+                                 'NEURON_MODEL_EQS',
+                                 'SYNAPTIC_EXC_EQS', 'SYNAPTIC_INH_EQS',
                                  'EXT_CURRENTS_EQS']
 
     # Default components
@@ -85,21 +84,23 @@ class NeuronSuperclass(object):
 
         if is_pyramidal is True:
             if self.compartment_type == 'soma':
-                self.full_model_defns = dict(NeuronSuperclass.default_soma_defns)
+                self.full_model_defns = dict(PointNeuron.default_soma_defns)
             else:
-                self.full_model_defns = dict(NeuronSuperclass.default_dendrite_defns)
+                self.full_model_defns = dict(PointNeuron.default_dendrite_defns)
 
             self.full_model_defns.update(self.neuron_model_defns)  # Model-specific definitions
 
         # Then, if we are dealing with a point neuron:
         else:
-            self.full_model_defns = dict(NeuronSuperclass.default_soma_defns)
+            self.full_model_defns = dict(PointNeuron.default_soma_defns)
             self.full_model_defns.update(self.neuron_model_defns)  # Model-specific definitions
 
+        # TODO - Remove this premature update (don't touch the template at any point;
+        #  compile the equations only when needed)
         # Update the generic template with neuron model-specific strings
         # _Safe_ substitute because empty keys are allowed (will be dealt with when the eqs are actually needed)
-        self.neuron_eqs_template = Template(NeuronSuperclass.membrane_eq_template)
-        self.neuron_eqs_template = Template(self.neuron_eqs_template.safe_substitute(self.full_model_defns))
+        #self.neuron_eqs_template = Template(PointNeuron.membrane_eq_template)
+        # self.neuron_eqs_template = Template(self.neuron_eqs_template.safe_substitute(self.full_model_defns))
 
         # Get a clean string with empty placeholders removed
         self.neuron_eqs = self.get_membrane_equation()
@@ -123,15 +124,29 @@ class NeuronSuperclass(object):
         }
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
+        """
+        Compiles the membrane equation from the template for use in Brian2.
+        This should be the only function where the template equation is used.
 
-        # Do ad hoc substitutions that don't affect the object's template
+        :param substitute_ad_hoc:
+        :param return_string:
+        :return:
+        """
+
+        # Get the generic template
+        neuron_eqs_template = Template(self.membrane_eq_template)
+
+        # Do ad hoc substitutions, overriding any definitions in full_model_defns
         if substitute_ad_hoc is not None:
-            neuron_eqs_template2 = Template(self.neuron_eqs_template.safe_substitute(substitute_ad_hoc))
+            neuron_eqs_template2 = Template(neuron_eqs_template.safe_substitute(substitute_ad_hoc))
         else:
-            neuron_eqs_template2 = self.neuron_eqs_template
+            neuron_eqs_template2 = neuron_eqs_template
+
+        # Make substitutions in full_model_defns
+        neuron_eqs_template2 = Template(neuron_eqs_template2.safe_substitute(self.full_model_defns))
 
         # Deal with extra placeholders in the eq template
-        nullify_placeholders_dict = {k: '' for k in NeuronSuperclass.all_template_placeholders}
+        nullify_placeholders_dict = {k: '' for k in PointNeuron.all_template_placeholders}
         neuron_eqs_template_wo_placeholders = neuron_eqs_template2.substitute(nullify_placeholders_dict)
 
         # Stringify the equations
@@ -148,11 +163,14 @@ class NeuronSuperclass(object):
             return b2.Equations(model_membrane_equation)
 
     def get_neuron_equations(self):
+        """
+        Returns the membrane equations in a form that prints out nicely in Jupyter Notebook
+
+        :return: b2.Equations object
+        """
+
         s = self.get_membrane_equation(return_string=True)
         return b2.Equations(s)
-
-    def get_eqs_template(self):
-        return self.neuron_eqs_template
 
     # def get_dict(self, base_dict=None, specific_compartment='XX'):
     #
@@ -196,13 +214,28 @@ class NeuronSuperclass(object):
     def get_states_to_monitor(self):
         return self.states_to_monitor
 
+    def set_model_definition(self, key, string_to_set):
+        self.full_model_defns[key] = string_to_set
+
+    def add_model_definition(self, key, string_to_add):
+        try:
+            self.full_model_defns[key] += string_to_add
+        except KeyError:  # ie if nothing has been defined
+            self.full_model_defns[key] = string_to_add
+
+    # TODO - stimulation with empty is weird
     def simulate_neuron(self, I_stim=input_factory.get_zero_current(), simulation_time=1000*ms, **kwargs):
 
         neuron_parameters = dict(self.neuron_parameters)  # Make a copy of parameters; otherwise will change object params
         neuron_parameters.update(kwargs)
         refractory_period = neuron_parameters['refractory_period']
 
-        eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_stim(t,i)'})
+        #eqs = self.get_membrane_equation(substitute_ad_hoc={'EXT_CURRENTS': '+ I_stim(t,i)'})
+        stim_string = '+ I_stim(t,i)'
+        old_model_defns = dict(self.full_model_defns)
+        self.add_model_definition('EXT_CURRENTS', stim_string)
+        eqs = self.get_membrane_equation()
+        self.full_model_defns = old_model_defns
 
         # Create a neuron group
         neuron = b2.NeuronGroup(1,
@@ -354,33 +387,52 @@ class NeuronSuperclass(object):
 
         self.neuron_parameters = imported_params
 
+    def add_tonic_current(self, I_tonic=50*pA, tau_rampup=None):
 
-    def add_tonic_current(self):
-        raise NotImplementedError
+        assert 'I_tonic' not in self.neuron_parameters, \
+            "Tonic current is already set, please modify neuron parameters instead of using this method"
 
-    def add_vm_noise(self, noise_sigma):
-        raise NotImplementedError
+        self.set_neuron_parameters(I_tonic=I_tonic, tau_tonic_rampup=tau_rampup)
 
-    def add_receptors(self, receptor_name, receptor_equations):
-        # assert exc_model in NeuronSuperclass.ExcModelNames, \
-        #     "Undefined excitation model!"
-        # assert inh_model in NeuronSuperclass.InhModelNames, \
-        #     "Undefined inhibition model!"
+        if tau_rampup is None:
+            ext_currents_string = '+ I_tonic $EXT_CURRENTS'
+        else:
+            ext_currents_string = '+ I_tonic*(1-exp(-t/(tau_tonic_rampup))) $EXT_CURRENTS'
 
-        # Add synaptic E/I model specific keys&strings to default strings
-        # Pyramidal cells are assumed to have alpha synapses (non-zero rise time)
-        # self.synaptic_excinh_model_strings = dict(NeuronSuperclass.default_synaptic_excinh_strings)
-        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[exc_model])
-        # self.synaptic_excinh_model_strings.update(NeuronSuperclass.SynapticExcInhModels[inh_model])
+        self.add_model_definition('EXT_CURRENTS', ext_currents_string)
+
+    def add_vm_noise(self, noise_sigma=2*mV):
+        self.set_model_definition('VM_NOISE', '+ noise_sigma*xi*taum_soma**-0.5')
+        C = self.neuron_parameters['C']
+        g_leak = self.neuron_parameters['g_leak']
+        self.set_neuron_parameters(noise_sigma=noise_sigma, taum_soma=C/g_leak)
+
+    # TODO - Setting receptors should also set default params
+    def set_excitatory_receptors(self, receptor_name):
+        assert receptor_name in ReceptorEqs.ExcModelNames, \
+            "Undefined excitation model!"
+
+        synaptic_exc_model = ReceptorEqs(receptor_name).get_receptor_equations()
+        self.full_model_defns.update(synaptic_exc_model)
 
         # Aggregate all compartment-specific variables to a common list
         # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
         #                           NeuronSuperclass.CompSpecificVariables[inh_model]
 
-        raise NotImplementedError
+    def set_inhibitory_receptors(self, receptor_name):
+        assert receptor_name in ReceptorEqs.InhModelNames, \
+            "Undefined inhibition model!"
+
+        synaptic_inh_model = ReceptorEqs(receptor_name).get_receptor_equations()
+        self.full_model_defns.update(synaptic_inh_model)
+
+        # Aggregate all compartment-specific variables to a common list
+        # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
+        #                           NeuronSuperclass.CompSpecificVariables[inh_model]
 
 
-class LifNeuron(NeuronSuperclass):
+
+class LifNeuron(PointNeuron):
     """
     Leaky Intergrate-and-Fire model.
     See Neuronal Dynamics, `Chapter 1 Section 3 <http://neuronaldynamics.epfl.ch/online/Ch1.S3.html>`_
@@ -478,7 +530,7 @@ class LifNeuron(NeuronSuperclass):
         return state_monitor, spike_monitor
 
 
-class EifNeuron(NeuronSuperclass):
+class EifNeuron(PointNeuron):
     """
     Exponential Integrate-and-Fire model.
     See Neuronal Dynamics, `Chapter 5 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch5.S2.html>`_
@@ -528,7 +580,7 @@ class EifNeuron(NeuronSuperclass):
         print("nr of spikes: {}".format(spike_monitor.count[0]))
 
 
-class AdexNeuron(NeuronSuperclass):
+class AdexNeuron(PointNeuron):
     """
     Adaptive Exponential Integrate-and-Fire model.
     See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
@@ -594,7 +646,7 @@ class AdexNeuron(NeuronSuperclass):
         plt.show()
 
 
-class HodgkinHuxleyNeuron(NeuronSuperclass):
+class HodgkinHuxleyNeuron(PointNeuron):
     """
     Implementation of a Hodgkin-Huxley neuron (with Na, K and leak channels).
     See Neuronal Dynamics, `Chapter 2 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch2.S2.html>`_
@@ -693,7 +745,7 @@ class HodgkinHuxleyNeuron(NeuronSuperclass):
         super().getting_started(step_amplitude, sine_amplitude, sine_freq, sine_dc)
 
 
-class IzhikevichNeuron(NeuronSuperclass):
+class IzhikevichNeuron(PointNeuron):
     """
     Izhikevich model.
     See Neuronal Dynamics, `Chapter 6 Section 1 <http://neuronaldynamics.epfl.ch/online/Ch6.S1.html>`_
@@ -753,10 +805,10 @@ class IzhikevichNeuron(NeuronSuperclass):
         plt.show()
 
 
-class LifAscNeuron(NeuronSuperclass):
+class LifAscNeuron(PointNeuron):  # TODO - Figure out why output different from plots in cell type atlas
     """
-    Leaky Integrate-and-Fire with After-spike Currents (LIF-ASC).
-    One of the generalized LIF (GLIF) models used in the Allen Brain Institute. LIF-ASC is GLIF_3.
+    Leaky Integrate-and-Fire with After-spike Currents (LIF-ASC; GLIF_3).
+    One of the generalized LIF (GLIF) models used in the Allen Brain Institute.
     For more information, see http://celltypes.brain-map.org/ ,
     http://help.brain-map.org/display/celltypes/Documentation?_ga=2.31556414.1221863260.1571652272-1994599725.1571652272 ,
     or Teeter et al. 2018 Nature Comm. https://www.nature.com/articles/s41467-017-02717-4
@@ -825,220 +877,194 @@ class LifAscNeuron(NeuronSuperclass):
 
 
 
-class FitzhughNagumo(object):
-    """
-    This file implements functions to simulate and analyze
-    Fitzhugh-Nagumo type differential equations with Brian2.
-    Relevant book chapters:
-    - http://neuronaldynamics.epfl.ch/online/Ch4.html
-    - http://neuronaldynamics.epfl.ch/online/Ch4.S3.html.
-    """
-
-    def get_trajectory(self, v0=0., w0=0., I=0., eps=0.1, a=2.0, tend=500.):
-        """Solves the following system of FitzHugh Nagumo equations
-        for given initial conditions:
-        dv/dt = 1/1ms * v * (1-v**2) - w + I
-        dw/dt = eps * (v + 0.5 * (a - w))
-        Args:
-            v0: Intial condition for v [mV]
-            w0: Intial condition for w [mV]
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-            tend: Simulation time [ms]
-        Returns:
-            tuple: (t, v, w) tuple for solutions
-        """
-
-        eqs = """
-        I_e : amp
-        dv/dt = 1/ms * ( v * (1 - (v**2) / (mV**2) ) - w + I_e * Mohm ) : volt
-        dw/dt = eps/ms * (v + 0.5 * (a * mV - w)) : volt
-        """
-
-        neuron = b2.NeuronGroup(1, eqs, method="euler")
-
-        # state initialization
-        neuron.v = v0 * mV
-        neuron.w = w0 * mV
-
-        # set input current
-        neuron.I_e = I * b2.nA
-
-        # record states
-        rec = b2.StateMonitor(neuron, ["v", "w"], record=True)
-
-        # run the simulation
-        b2.run(tend * ms)
-
-        return (rec.t / ms, rec.v[0] / mV, rec.w[0] / mV)
-
-    def plot_flow(self, I=0., eps=0.1, a=2.0):
-        """Plots the phase plane of the Fitzhugh-Nagumo model
-        for given model parameters.
-        Args:
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-        """
-
-        # define the interval spanned by voltage v and recovery variable w
-        # to produce the phase plane
-        vv = np.arange(-2.5, 2.5, 0.2)
-        ww = np.arange(-2.5, 5.5, 0.2)
-        (VV, WW) = np.meshgrid(vv, ww)
-
-        # Compute derivative of v and w according to FHN equations
-        # and velocity as vector norm
-        dV = VV * (1. - (VV ** 2)) - WW + I
-        dW = eps * (VV + 0.5 * (a - WW))
-        vel = np.sqrt(dV ** 2 + dW ** 2)
-
-        # Use quiver function to plot the phase plane
-        plt.quiver(VV, WW, dV, dW, vel)
-
-    def get_fixed_point(self, I=0., eps=0.1, a=2.0):
-        """Computes the fixed point of the FitzHugh Nagumo model
-        as a function of the input current I.
-        We solve the 3rd order poylnomial equation:
-        v**3 + V + a - I0 = 0
-        Args:
-            I: Constant input [mV]
-            eps: Inverse time constant of the recovery variable w [1/ms]
-            a: Offset of the w-nullcline [mV]
-        Returns:
-            tuple: (v_fp, w_fp) fixed point of the equations
-        """
-
-        # Use poly1d function from numpy to compute the
-        # roots of 3rd order polynomial
-        P = np.poly1d([1, 0, 1, (a - I)], variable="x")
-
-        # take only the real root
-        v_fp = np.real(P.r[np.isreal(P.r)])[0]
-        w_fp = 2. * v_fp + a
-
-        return (v_fp, w_fp)
-
-
-class passive_cable(object):
-    """
-    Implements compartmental model of a passive cable. See Neuronal Dynamics
-    `Chapter 3 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch3.S2.html>`_
-    """
-
-    # DEFAULT morphological and electrical parameters
-    CABLE_LENGTH = 500. * b2.um  # length of dendrite
-    CABLE_DIAMETER = 2. * b2.um  # diameter of dendrite
-    R_LONGITUDINAL = 0.5 * b2.kohm * b2.mm  # Intracellular medium resistance
-    R_TRANSVERSAL = 1.25 * Mohm * b2.mm ** 2  # cell membrane resistance (->leak current)
-    E_LEAK = -70. * mV  # reversal potential of the leak current (-> resting potential)
-    CAPACITANCE = 0.8 * b2.uF / b2.cm ** 2  # membrane capacitance
-    DEFAULT_INPUT_CURRENT = input_factory.get_step_current(2000, 3000, unit_time=b2.us, amplitude=0.2 * b2.namp)
-    DEFAULT_INPUT_LOCATION = [CABLE_LENGTH / 3]  # provide an array of locations
-
-    # print("Membrane Timescale = {}".format(R_TRANSVERSAL*CAPACITANCE))
-
-    def simulate_passive_cable(self, current_injection_location=DEFAULT_INPUT_LOCATION, input_current=DEFAULT_INPUT_CURRENT,
-                               length=CABLE_LENGTH, diameter=CABLE_DIAMETER,
-                               r_longitudinal=R_LONGITUDINAL,
-                               r_transversal=R_TRANSVERSAL, e_leak=E_LEAK, initial_voltage=E_LEAK,
-                               capacitance=CAPACITANCE, nr_compartments=200, simulation_time=5 * ms):
-        """Builds a multicompartment cable and numerically approximates the cable equation.
-        Args:
-            t_spikes (int): list of spike times
-            current_injection_location (list): List [] of input locations (Quantity, Length): [123.*b2.um]
-            input_current (TimedArray): TimedArray of current amplitudes. One column per current_injection_location.
-            length (Quantity): Length of the cable: 0.8*b2.mm
-            diameter (Quantity): Diameter of the cable: 0.2*b2.um
-            r_longitudinal (Quantity): The longitudinal (axial) resistance of the cable: 0.5*b2.kohm*b2.mm
-            r_transversal (Quantity): The transversal resistance (=membrane resistance): 1.25*Mohm*b2.mm**2
-            e_leak (Quantity): The reversal potential of the leak current (=resting potential): -70.*mV
-            initial_voltage (Quantity): Value of the potential at t=0: -70.*mV
-            capacitance (Quantity): Membrane capacitance: 0.8*b2.uF/b2.cm**2
-            nr_compartments (int): Number of compartments. Spatial discretization: 200
-            simulation_time (Quantity): Time for which the dynamics are simulated: 5*ms
-        Returns:
-            (StateMonitor, SpatialNeuron): The state monitor contains the membrane voltage in a
-            Time x Location matrix. The SpatialNeuron object specifies the simulated neuron model
-            and gives access to the morphology. You may want to use those objects for
-            spatial indexing: myVoltageStateMonitor[mySpatialNeuron.morphology[0.123*b2.um]].v
-        """
-        assert isinstance(input_current, b2.TimedArray), "input_current is not of type TimedArray"
-        assert input_current.values.shape[1] == len(current_injection_location), \
-            "number of injection_locations does not match nr of input currents"
-
-        cable_morphology = b2.Cylinder(diameter=diameter, length=length, n=nr_compartments)
-        # Im is transmembrane current
-        # Iext is  injected current at a specific position on dendrite
-        EL = e_leak
-        RT = r_transversal
-        eqs = """
-        Iext = current(t, location_index): amp (point current)
-        location_index : integer (constant)
-        Im = (EL-v)/RT : amp/meter**2
-        """
-        cable_model = b2.SpatialNeuron(morphology=cable_morphology, model=eqs, Cm=capacitance, Ri=r_longitudinal)
-        monitor_v = b2.StateMonitor(cable_model, "v", record=True)
-
-        # inject all input currents at the specified location:
-        nr_input_locations = len(current_injection_location)
-        input_current_0 = np.insert(input_current.values, 0, 0., axis=1) * b2.amp  # insert default current: 0. [amp]
-        current = b2.TimedArray(input_current_0, dt=input_current.dt * b2.second)
-        for current_index in range(nr_input_locations):
-            insert_location = current_injection_location[current_index]
-            compartment_index = int(np.floor(insert_location / (length / nr_compartments)))
-            # next line: current_index+1 because 0 is the default current 0Amp
-            cable_model.location_index[compartment_index] = current_index + 1
-
-        # set initial values and run for 1 ms
-        cable_model.v = initial_voltage
-        b2.run(simulation_time)
-        return monitor_v, cable_model
-
-    def getting_started(self):
-        """A simple code example to get started.
-        """
-        current = input_factory.get_step_current(500, 510, unit_time=b2.us, amplitude=3. * b2.namp)
-        voltage_monitor, cable_model = self.simulate_passive_cable(
-            length=0.5 * b2.mm, current_injection_location=[0.1 * b2.mm], input_current=current,
-            nr_compartments=100, simulation_time=2 * ms)
-
-        # provide a minimal plot
-        plt.figure()
-        plt.imshow(voltage_monitor.v / b2.volt)
-        plt.colorbar(label="voltage")
-        plt.xlabel("time index")
-        plt.ylabel("location index")
-        plt.title("vm at (t,x), raw data voltage_monitor.v")
-        plt.show()
-
-
+# class FitzhughNagumo(object):
+#     """
+#     This file implements functions to simulate and analyze
+#     Fitzhugh-Nagumo type differential equations with Brian2.
+#     Relevant book chapters:
+#     - http://neuronaldynamics.epfl.ch/online/Ch4.html
+#     - http://neuronaldynamics.epfl.ch/online/Ch4.S3.html.
+#     """
+#
+#     def get_trajectory(self, v0=0., w0=0., I=0., eps=0.1, a=2.0, tend=500.):
+#         """Solves the following system of FitzHugh Nagumo equations
+#         for given initial conditions:
+#         dv/dt = 1/1ms * v * (1-v**2) - w + I
+#         dw/dt = eps * (v + 0.5 * (a - w))
+#         Args:
+#             v0: Intial condition for v [mV]
+#             w0: Intial condition for w [mV]
+#             I: Constant input [mV]
+#             eps: Inverse time constant of the recovery variable w [1/ms]
+#             a: Offset of the w-nullcline [mV]
+#             tend: Simulation time [ms]
+#         Returns:
+#             tuple: (t, v, w) tuple for solutions
+#         """
+#
+#         eqs = """
+#         I_e : amp
+#         dv/dt = 1/ms * ( v * (1 - (v**2) / (mV**2) ) - w + I_e * Mohm ) : volt
+#         dw/dt = eps/ms * (v + 0.5 * (a * mV - w)) : volt
+#         """
+#
+#         neuron = b2.NeuronGroup(1, eqs, method="euler")
+#
+#         # state initialization
+#         neuron.v = v0 * mV
+#         neuron.w = w0 * mV
+#
+#         # set input current
+#         neuron.I_e = I * b2.nA
+#
+#         # record states
+#         rec = b2.StateMonitor(neuron, ["v", "w"], record=True)
+#
+#         # run the simulation
+#         b2.run(tend * ms)
+#
+#         return (rec.t / ms, rec.v[0] / mV, rec.w[0] / mV)
+#
+#     def plot_flow(self, I=0., eps=0.1, a=2.0):
+#         """Plots the phase plane of the Fitzhugh-Nagumo model
+#         for given model parameters.
+#         Args:
+#             I: Constant input [mV]
+#             eps: Inverse time constant of the recovery variable w [1/ms]
+#             a: Offset of the w-nullcline [mV]
+#         """
+#
+#         # define the interval spanned by voltage v and recovery variable w
+#         # to produce the phase plane
+#         vv = np.arange(-2.5, 2.5, 0.2)
+#         ww = np.arange(-2.5, 5.5, 0.2)
+#         (VV, WW) = np.meshgrid(vv, ww)
+#
+#         # Compute derivative of v and w according to FHN equations
+#         # and velocity as vector norm
+#         dV = VV * (1. - (VV ** 2)) - WW + I
+#         dW = eps * (VV + 0.5 * (a - WW))
+#         vel = np.sqrt(dV ** 2 + dW ** 2)
+#
+#         # Use quiver function to plot the phase plane
+#         plt.quiver(VV, WW, dV, dW, vel)
+#
+#     def get_fixed_point(self, I=0., eps=0.1, a=2.0):
+#         """Computes the fixed point of the FitzHugh Nagumo model
+#         as a function of the input current I.
+#         We solve the 3rd order poylnomial equation:
+#         v**3 + V + a - I0 = 0
+#         Args:
+#             I: Constant input [mV]
+#             eps: Inverse time constant of the recovery variable w [1/ms]
+#             a: Offset of the w-nullcline [mV]
+#         Returns:
+#             tuple: (v_fp, w_fp) fixed point of the equations
+#         """
+#
+#         # Use poly1d function from numpy to compute the
+#         # roots of 3rd order polynomial
+#         P = np.poly1d([1, 0, 1, (a - I)], variable="x")
+#
+#         # take only the real root
+#         v_fp = np.real(P.r[np.isreal(P.r)])[0]
+#         w_fp = 2. * v_fp + a
+#
+#         return (v_fp, w_fp)
+#
+#
+# class passive_cable(object):
+#     """
+#     Implements compartmental model of a passive cable. See Neuronal Dynamics
+#     `Chapter 3 Section 2 <http://neuronaldynamics.epfl.ch/online/Ch3.S2.html>`_
+#     """
+#
+#     # DEFAULT morphological and electrical parameters
+#     CABLE_LENGTH = 500. * b2.um  # length of dendrite
+#     CABLE_DIAMETER = 2. * b2.um  # diameter of dendrite
+#     R_LONGITUDINAL = 0.5 * b2.kohm * b2.mm  # Intracellular medium resistance
+#     R_TRANSVERSAL = 1.25 * Mohm * b2.mm ** 2  # cell membrane resistance (->leak current)
+#     E_LEAK = -70. * mV  # reversal potential of the leak current (-> resting potential)
+#     CAPACITANCE = 0.8 * b2.uF / b2.cm ** 2  # membrane capacitance
+#     DEFAULT_INPUT_CURRENT = input_factory.get_step_current(2000, 3000, unit_time=b2.us, amplitude=0.2 * b2.namp)
+#     DEFAULT_INPUT_LOCATION = [CABLE_LENGTH / 3]  # provide an array of locations
+#
+#     # print("Membrane Timescale = {}".format(R_TRANSVERSAL*CAPACITANCE))
+#
+#     def simulate_passive_cable(self, current_injection_location=DEFAULT_INPUT_LOCATION, input_current=DEFAULT_INPUT_CURRENT,
+#                                length=CABLE_LENGTH, diameter=CABLE_DIAMETER,
+#                                r_longitudinal=R_LONGITUDINAL,
+#                                r_transversal=R_TRANSVERSAL, e_leak=E_LEAK, initial_voltage=E_LEAK,
+#                                capacitance=CAPACITANCE, nr_compartments=200, simulation_time=5 * ms):
+#         """Builds a multicompartment cable and numerically approximates the cable equation.
+#         Args:
+#             t_spikes (int): list of spike times
+#             current_injection_location (list): List [] of input locations (Quantity, Length): [123.*b2.um]
+#             input_current (TimedArray): TimedArray of current amplitudes. One column per current_injection_location.
+#             length (Quantity): Length of the cable: 0.8*b2.mm
+#             diameter (Quantity): Diameter of the cable: 0.2*b2.um
+#             r_longitudinal (Quantity): The longitudinal (axial) resistance of the cable: 0.5*b2.kohm*b2.mm
+#             r_transversal (Quantity): The transversal resistance (=membrane resistance): 1.25*Mohm*b2.mm**2
+#             e_leak (Quantity): The reversal potential of the leak current (=resting potential): -70.*mV
+#             initial_voltage (Quantity): Value of the potential at t=0: -70.*mV
+#             capacitance (Quantity): Membrane capacitance: 0.8*b2.uF/b2.cm**2
+#             nr_compartments (int): Number of compartments. Spatial discretization: 200
+#             simulation_time (Quantity): Time for which the dynamics are simulated: 5*ms
+#         Returns:
+#             (StateMonitor, SpatialNeuron): The state monitor contains the membrane voltage in a
+#             Time x Location matrix. The SpatialNeuron object specifies the simulated neuron model
+#             and gives access to the morphology. You may want to use those objects for
+#             spatial indexing: myVoltageStateMonitor[mySpatialNeuron.morphology[0.123*b2.um]].v
+#         """
+#         assert isinstance(input_current, b2.TimedArray), "input_current is not of type TimedArray"
+#         assert input_current.values.shape[1] == len(current_injection_location), \
+#             "number of injection_locations does not match nr of input currents"
+#
+#         cable_morphology = b2.Cylinder(diameter=diameter, length=length, n=nr_compartments)
+#         # Im is transmembrane current
+#         # Iext is  injected current at a specific position on dendrite
+#         EL = e_leak
+#         RT = r_transversal
+#         eqs = """
+#         Iext = current(t, location_index): amp (point current)
+#         location_index : integer (constant)
+#         Im = (EL-v)/RT : amp/meter**2
+#         """
+#         cable_model = b2.SpatialNeuron(morphology=cable_morphology, model=eqs, Cm=capacitance, Ri=r_longitudinal)
+#         monitor_v = b2.StateMonitor(cable_model, "v", record=True)
+#
+#         # inject all input currents at the specified location:
+#         nr_input_locations = len(current_injection_location)
+#         input_current_0 = np.insert(input_current.values, 0, 0., axis=1) * b2.amp  # insert default current: 0. [amp]
+#         current = b2.TimedArray(input_current_0, dt=input_current.dt * b2.second)
+#         for current_index in range(nr_input_locations):
+#             insert_location = current_injection_location[current_index]
+#             compartment_index = int(np.floor(insert_location / (length / nr_compartments)))
+#             # next line: current_index+1 because 0 is the default current 0Amp
+#             cable_model.location_index[compartment_index] = current_index + 1
+#
+#         # set initial values and run for 1 ms
+#         cable_model.v = initial_voltage
+#         b2.run(simulation_time)
+#         return monitor_v, cable_model
+#
+#     def getting_started(self):
+#         """A simple code example to get started.
+#         """
+#         current = input_factory.get_step_current(500, 510, unit_time=b2.us, amplitude=3. * b2.namp)
+#         voltage_monitor, cable_model = self.simulate_passive_cable(
+#             length=0.5 * b2.mm, current_injection_location=[0.1 * b2.mm], input_current=current,
+#             nr_compartments=100, simulation_time=2 * ms)
+#
+#         # provide a minimal plot
+#         plt.figure()
+#         plt.imshow(voltage_monitor.v / b2.volt)
+#         plt.colorbar(label="voltage")
+#         plt.xlabel("time index")
+#         plt.ylabel("location index")
+#         plt.title("vm at (t,x), raw data voltage_monitor.v")
+#         plt.show()
 
 
 if __name__ == '__main__':
-    # fixed_values = {'C': 110 * pF, 'g_leak': 3.1 * nS, 'E_leak': -70 * mV, 'Vcut': 20 * mV, 'refr_time': 4 * ms}
-    # a = NeuronSuperclass({'I_NEURON_MODEL': 'kissa', 'NEURON_MODEL_EQ': 'dkissa/dt = mau'})
-    # print(a.get_membrane_equation(return_string=True))
-    from brian2tools import *
-
-    # a = exp_IF()
-    # # a.getting_started()
-    # inputcurr = input_factory.get_step_current(t_start=20, t_end=120, unit_time=ms, amplitude=0.5 * namp)
-    # states, spikes = a.simulate_exponential_IF_neuron(I_stim=inputcurr)
-    # brian_plot(states)
-    # plt.ylim([-70, 20])
-    # plt.show()
-
-    # a = AdEx()
-    # inputcurr = input_factory.get_step_current(t_start=20, t_end=120, unit_time=ms, amplitude=0.2 * namp)
-    # states, spikes = a.simulate_AdEx_neuron(I_stim=inputcurr)
-    # a.getting_started()
-    # a.plot_adex_state(states)
-    # plot_state(states.t, states.vm[0])
-    # plt.ylim([-80, 20])
-    # plt.show()
-
-    a = LifNeuron()
-    a.simulate_LIF_neuron()
-    a.getting_started()
+    pass

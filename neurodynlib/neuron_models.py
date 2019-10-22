@@ -19,7 +19,7 @@ from neurodynlib.tools import plot_tools, spike_tools, input_factory
 from string import Template
 from datetime import datetime
 import json
-from neurodynlib.receptor_models import ReceptorEqs
+from neurodynlib.receptor_models import ReceptorModel
 
 import sys
 # sys.path.append('/home/henhok/PycharmProjects/brian2modelfitting/')
@@ -95,12 +95,6 @@ class PointNeuron(object):
             self.full_model_defns = dict(PointNeuron.default_soma_defns)
             self.full_model_defns.update(self.neuron_model_defns)  # Model-specific definitions
 
-        # TODO - Remove this premature update (don't touch the template at any point;
-        #  compile the equations only when needed)
-        # Update the generic template with neuron model-specific strings
-        # _Safe_ substitute because empty keys are allowed (will be dealt with when the eqs are actually needed)
-        #self.neuron_eqs_template = Template(PointNeuron.membrane_eq_template)
-        # self.neuron_eqs_template = Template(self.neuron_eqs_template.safe_substitute(self.full_model_defns))
 
         # Get a clean string with empty placeholders removed
         self.neuron_eqs = self.get_membrane_equation()
@@ -122,6 +116,11 @@ class PointNeuron(object):
             'E_leak': mV, 'V_reset': mV, 'V_threshold': mV,
             'g_leak': nS, 'C': pF, 'refractory_period': ms
         }
+
+        # Will be useful for multicompartmental neurons using these same classes
+        # NB! C and g_leak not set compartment-specific by default due to the way
+        # multicompartmental neurons are set, see module multicompartment_models.py
+        self.compartment_vars_and_consts = ['vm']
 
     def get_membrane_equation(self, substitute_ad_hoc=None, return_string=True):
         """
@@ -161,6 +160,14 @@ class PointNeuron(object):
             #substitutables = {k: k+'_'+self.compartment for k in self.comp_specific_vars}
             #compartment_eq = b2.Equations(self.model_membrane_equation, **substitutables)
             return b2.Equations(model_membrane_equation)
+
+    def get_compartment_equations(self, compartment_name):
+        membrane_eq = self.get_membrane_equation(return_string=True)
+
+        substitutables = {key: key + '_' + compartment_name for key in self.compartment_vars_and_consts}
+        compartment_eq = b2.Equations(membrane_eq, **substitutables)
+
+        return compartment_eq
 
     def get_neuron_equations(self):
         """
@@ -401,6 +408,13 @@ class PointNeuron(object):
 
         self.add_model_definition('EXT_CURRENTS', ext_currents_string)
 
+    def add_external_current(self, current_name='I_ext', current_eqs=None):
+        self.add_model_definition('EXT_CURRENTS', '+ '+current_name)
+        if current_eqs is None:
+            self.add_model_definition('EXT_CURRENTS_EQS', '\n' + current_name + ': amp')
+        else:
+            self.add_model_definition('EXT_CURRENTS_EQS', '\n' + current_eqs)
+
     def add_vm_noise(self, noise_sigma=2*mV):
         self.set_model_definition('VM_NOISE', '+ noise_sigma*xi*taum_soma**-0.5')
         C = self.neuron_parameters['C']
@@ -409,28 +423,41 @@ class PointNeuron(object):
 
     # TODO - Setting receptors should also set default params
     def set_excitatory_receptors(self, receptor_name):
-        assert receptor_name in ReceptorEqs.ExcModelNames, \
+        assert receptor_name in ReceptorModel.ExcModelNames, \
             "Undefined excitation model!"
 
-        synaptic_exc_model = ReceptorEqs(receptor_name).get_receptor_equations()
+        receptor_model = ReceptorModel(receptor_name)
+        synaptic_exc_model = receptor_model.get_receptor_equations()
         self.full_model_defns.update(synaptic_exc_model)
+
+        # Add compartment-specific variable names to the common list
+        self.compartment_vars_and_consts.extend(receptor_model.get_compartment_specific_variables())
 
         # Aggregate all compartment-specific variables to a common list
         # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
         #                           NeuronSuperclass.CompSpecificVariables[inh_model]
 
     def set_inhibitory_receptors(self, receptor_name):
-        assert receptor_name in ReceptorEqs.InhModelNames, \
+        assert receptor_name in ReceptorModel.InhModelNames, \
             "Undefined inhibition model!"
 
-        synaptic_inh_model = ReceptorEqs(receptor_name).get_receptor_equations()
+        receptor_model = ReceptorModel(receptor_name)
+        synaptic_inh_model = receptor_model.get_receptor_equations()
         self.full_model_defns.update(synaptic_inh_model)
+
+        # Add compartment-specific variable names to the common list
+        self.compartment_vars_and_consts.extend(receptor_model.get_compartment_specific_variables())
 
         # Aggregate all compartment-specific variables to a common list
         # self.comp_specific_vars = NeuronSuperclass.CompSpecificVariables[exc_model] + \
         #                           NeuronSuperclass.CompSpecificVariables[inh_model]
 
-
+    # def add_optimization_bounds(self, **kwargs):
+    #     self.variables_to_optimize = kwargs.keys()
+    #     self.optimization_bounds = dict(kwargs)
+    #
+    #     # for var in self.variables_to_optimize:
+    #     #     self.add_model_definition('EXT_CURRENTS_EQS', '\n')
 
 class LifNeuron(PointNeuron):
     """
@@ -875,6 +902,13 @@ class LifAscNeuron(PointNeuron):  # TODO - Figure out why output different from 
 
         self.set_neuron_parameters(**abi_parameters)
 
+
+def neuron_factory(neuron_model_name):
+    name_to_class = {'LIF': LifNeuron, 'EIF': EifNeuron, 'Adex': AdexNeuron,
+                     'HH': HodgkinHuxleyNeuron, 'HodgkinHuxley': HodgkinHuxleyNeuron,
+                     'Izhikevich': IzhikevichNeuron, 'LIFASC': LifAscNeuron}
+
+    return name_to_class[neuron_model_name]()
 
 
 # class FitzhughNagumo(object):

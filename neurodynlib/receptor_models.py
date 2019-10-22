@@ -1,4 +1,4 @@
-class ReceptorEqs():
+class ReceptorModel(object):
     # <editor-fold desc="SYNAPTIC EXC/INH MODEL COMPONENTS">
     default_synaptic_excinh_strings = {}
 
@@ -171,11 +171,17 @@ class ReceptorEqs():
     # </editor-fold>
 
     def __init__(self, receptor_model):
+        self.receptor_model = receptor_model
         self.receptor_model_eqs = self.SynapticExcInhModels[receptor_model]
 
     def get_receptor_equations(self):
         return self.receptor_model_eqs
 
+    def get_compartment_specific_variables(self):
+        return self.CompSpecificVariables[self.receptor_model]
+
+    def get_receptor_names(self):
+        return self.Receptors[self.receptor_model]
 
 if __name__ == '__main__':
-    print(ReceptorEqs('SIMPLE_E').get_receptor_equations())
+    print(ReceptorModel('SIMPLE_E').get_receptor_equations())

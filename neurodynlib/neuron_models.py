@@ -510,79 +510,79 @@ class LifNeuron(PointNeuron):
         super().__init__()
 
 
-    def _obfuscate_params(self, param_set):
-        """ A helper to _obfuscate_params a parameter vector.
-        Args:
-            param_set:
-        Returns:
-            list: obfuscated list
-        """
-        obfuscated_factors = [LifNeuron.__OBFUSCATION_FACTORS[i] * param_set[i] for i in range(6)]
-        return obfuscated_factors
-
-    def _deobfuscate_params(self, obfuscated_params):
-        """ A helper to deobfuscate a parameter set.
-        Args:
-            obfuscated_params (list):
-        Returns:
-            list: de-obfuscated list
-        """
-        param_set = [obfuscated_params[i] / LifNeuron.__OBFUSCATION_FACTORS[i] for i in range(6)]
-        return param_set
-
-    def get_random_param_set(self, random_seed=None):
-        """
-        creates a set of random parameters. All values are constrained to their typical range
-        Returns:
-            list: a list of (obfuscated) parameters. Use this vector when calling simulate_random_neuron()
-        """
-        random.seed(random_seed)
-        v_rest = (-75. + random.randint(0, 15)) * mV
-        v_reset = v_rest + random.randint(-10, +10) * mV
-        firing_threshold = random.randint(-40, +5) * mV
-        membrane_resistance = random.randint(2, 15) * Mohm
-        membrane_time_scale = random.randint(2, 30) * ms
-        abs_refractory_period = random.randint(1, 7) * ms
-        true_rand_params = [v_rest, v_reset, firing_threshold,
-                            membrane_resistance, membrane_time_scale, abs_refractory_period]
-        return self._obfuscate_params(true_rand_params)
-
-    def print_obfuscated_parameters(self, obfuscated_params):
-        """ Print the de-obfuscated values to the console
-        Args:
-            obfuscated_params:
-        Returns:
-        """
-        true_vals = self._deobfuscate_params(obfuscated_params)
-        print("Resting potential: {}".format(true_vals[0]))
-        print("Reset voltage: {}".format(true_vals[1]))
-        print("Firing threshold: {}".format(true_vals[2]))
-        print("Membrane resistance: {}".format(true_vals[3]))
-        print("Membrane time-scale: {}".format(true_vals[4]))
-        print("Absolute refractory period: {}".format(true_vals[5]))
-
-    def simulate_random_neuron(self, input_current, obfuscated_param_set):
-        """
-        Simulates a LIF neuron with unknown parameters (obfuscated_param_set)
-        Args:
-            input_current (TimedArray): The current to probe the neuron
-            obfuscated_param_set (list): obfuscated parameters
-        Returns:
-            StateMonitor: Brian2 StateMonitor for the membrane voltage "v"
-            SpikeMonitor: Biran2 SpikeMonitor
-        """
-        vals = self._deobfuscate_params(obfuscated_param_set)
-        # run the LIF model
-        state_monitor, spike_monitor = self.simulate_LIF_neuron(
-            input_current,
-            simulation_time=50 * ms,
-            EL=vals[0],
-            v_reset=vals[1],
-            firing_threshold=vals[2],
-            R=vals[3],
-            tau=vals[4],
-            abs_refractory_period=vals[5])
-        return state_monitor, spike_monitor
+    # def _obfuscate_params(self, param_set):
+    #     """ A helper to _obfuscate_params a parameter vector.
+    #     Args:
+    #         param_set:
+    #     Returns:
+    #         list: obfuscated list
+    #     """
+    #     obfuscated_factors = [LifNeuron.__OBFUSCATION_FACTORS[i] * param_set[i] for i in range(6)]
+    #     return obfuscated_factors
+    #
+    # def _deobfuscate_params(self, obfuscated_params):
+    #     """ A helper to deobfuscate a parameter set.
+    #     Args:
+    #         obfuscated_params (list):
+    #     Returns:
+    #         list: de-obfuscated list
+    #     """
+    #     param_set = [obfuscated_params[i] / LifNeuron.__OBFUSCATION_FACTORS[i] for i in range(6)]
+    #     return param_set
+    #
+    # def get_random_param_set(self, random_seed=None):
+    #     """
+    #     creates a set of random parameters. All values are constrained to their typical range
+    #     Returns:
+    #         list: a list of (obfuscated) parameters. Use this vector when calling simulate_random_neuron()
+    #     """
+    #     random.seed(random_seed)
+    #     v_rest = (-75. + random.randint(0, 15)) * mV
+    #     v_reset = v_rest + random.randint(-10, +10) * mV
+    #     firing_threshold = random.randint(-40, +5) * mV
+    #     membrane_resistance = random.randint(2, 15) * Mohm
+    #     membrane_time_scale = random.randint(2, 30) * ms
+    #     abs_refractory_period = random.randint(1, 7) * ms
+    #     true_rand_params = [v_rest, v_reset, firing_threshold,
+    #                         membrane_resistance, membrane_time_scale, abs_refractory_period]
+    #     return self._obfuscate_params(true_rand_params)
+    #
+    # def print_obfuscated_parameters(self, obfuscated_params):
+    #     """ Print the de-obfuscated values to the console
+    #     Args:
+    #         obfuscated_params:
+    #     Returns:
+    #     """
+    #     true_vals = self._deobfuscate_params(obfuscated_params)
+    #     print("Resting potential: {}".format(true_vals[0]))
+    #     print("Reset voltage: {}".format(true_vals[1]))
+    #     print("Firing threshold: {}".format(true_vals[2]))
+    #     print("Membrane resistance: {}".format(true_vals[3]))
+    #     print("Membrane time-scale: {}".format(true_vals[4]))
+    #     print("Absolute refractory period: {}".format(true_vals[5]))
+    #
+    # def simulate_random_neuron(self, input_current, obfuscated_param_set):
+    #     """
+    #     Simulates a LIF neuron with unknown parameters (obfuscated_param_set)
+    #     Args:
+    #         input_current (TimedArray): The current to probe the neuron
+    #         obfuscated_param_set (list): obfuscated parameters
+    #     Returns:
+    #         StateMonitor: Brian2 StateMonitor for the membrane voltage "v"
+    #         SpikeMonitor: Biran2 SpikeMonitor
+    #     """
+    #     vals = self._deobfuscate_params(obfuscated_param_set)
+    #     # run the LIF model
+    #     state_monitor, spike_monitor = self.simulate_LIF_neuron(
+    #         input_current,
+    #         simulation_time=50 * ms,
+    #         EL=vals[0],
+    #         v_reset=vals[1],
+    #         firing_threshold=vals[2],
+    #         R=vals[3],
+    #         tau=vals[4],
+    #         abs_refractory_period=vals[5])
+    #     return state_monitor, spike_monitor
 
 
 class EifNeuron(PointNeuron):

@@ -15,11 +15,11 @@ import matplotlib.pyplot as plt
 import random
 import brian2 as b2
 from brian2.units import *
-from cxsystem2.neurodynlib.tools import plot_tools, spike_tools, input_factory
+from neurodynlib.tools import plot_tools, spike_tools, input_factory
 from string import Template
 from datetime import datetime
 import json
-from cxsystem2.neurodynlib.receptor_models import ReceptorModel
+from neurodynlib.receptor_models import ReceptorModel
 from IPython.core.display import display, HTML
 
 

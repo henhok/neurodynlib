@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import random
 import brian2 as b2
 from brian2.units import *
-import cxsystem2.neurodynlib as nd
+import neurodynlib as nd
 
 
 class LeakyCompartment(nd.PointNeuron):

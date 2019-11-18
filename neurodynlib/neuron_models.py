@@ -44,12 +44,13 @@ class PointNeuron(object):
     $SYNAPTIC_EXC_EQS
     $SYNAPTIC_INH_EQS
     $EXT_CURRENTS_EQS
+    $OTHER_EQS
     '''
     all_template_placeholders = ['I_NEURON_MODEL', 'I_SYNAPTIC_EXC', 'I_SYNAPTIC_INH', 'EXT_CURRENTS',
                                  'VM_NOISE', 'VM_UNIT', 'BRIAN2_FLAGS',
                                  'NEURON_MODEL_EQS',
                                  'SYNAPTIC_EXC_EQS', 'SYNAPTIC_INH_EQS',
-                                 'EXT_CURRENTS_EQS']
+                                 'EXT_CURRENTS_EQS', 'OTHER_EQS']
 
     # Default components
     default_soma_defns = {
@@ -483,6 +484,19 @@ class PointNeuron(object):
     #
     #     # for var in self.variables_to_optimize:
     #     #     self.add_model_definition('EXT_CURRENTS_EQS', '\n')
+
+    def add_xy(self):
+        self.add_model_definition('OTHER_EQS',
+                                  '''\n x : meter
+                                  \n y: meter''')
+
+    def make_neuron_group(self, n):
+        neuron_pop = b2.NeuronGroup(n, model=self.get_neuron_equations(),
+                                       namespace=self.get_neuron_parameters(),
+                                       reset=self.get_reset_statements(),
+                                       threshold=self.get_threshold_condition(),
+                                       refractory=self.get_refractory_period())
+        return neuron_pop
 
 
 class LifNeuron(PointNeuron):
